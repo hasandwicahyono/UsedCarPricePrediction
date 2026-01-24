@@ -9,7 +9,7 @@ class PlotManager:
 
     def __init__(
         self,
-        base_dir: str = "outputs/figures",
+        base_dir: str = "outputs/figures/shap",
         dpi: int = 300,
         fmt: str = "png",
         tight_layout: bool = True,

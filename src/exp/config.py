@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 @dataclass(frozen=True)
@@ -22,10 +22,24 @@ class ExperimentConfig:
     # Target
     log_target: bool = True
     
+    # Early Stopping
     early_stopping_patience: int = 5
 
+    # Metric
     metric_name: str = "r2"
     metric_opt: str = "maximize"  # or "maximize"
+
+    # Residual Stacking
+    residuals: dict = field(default_factory=lambda: {
+        "XGBoost": [
+            {"kind": "Quantile", "params": {"quantile": 0.9}},
+            {"kind": "ElasticNet"}
+        ],
+        "RandomForest": [
+            {"kind": "Huber", "params": {"epsilon": 1.5}},
+            {"kind": "ElasticNet"}
+        ]
+    })
 
     # Pruning
     pruner_startup_trials: int = 10

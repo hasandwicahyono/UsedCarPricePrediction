@@ -13,7 +13,6 @@ from sklearn.metrics import (
 
 Direction = Literal["minimize", "maximize"]
 
-
 class MetricStrategy(Protocol):
     name: str
     direction: Direction
@@ -82,6 +81,7 @@ class R2Metric(BaseMetric):
     def compute(self, y_true, y_pred) -> float:
         return float(r2_score(y_true, y_pred))
 
+
 @dataclass(frozen=True)
 class NegMSEMetric(BaseMetric):
     name: str = "NegMSE"
@@ -93,6 +93,7 @@ class NegMSEMetric(BaseMetric):
     def supports_pruning(self) -> bool:
         return False
     
+
 def make_metric(metric_name: str) -> MetricStrategy:
     m = metric_name.lower()
     if m == "mae":

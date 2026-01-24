@@ -10,17 +10,28 @@ class ShapAnalyzer:
     Supports Tree/Linear/Kernel explainers.
     Kernel explainers (SVR/NN) are subsampled by default.
     """
-    def __init__(self, shap_store: list, background_size: int = 100, max_eval_samples: int = 300, seed: int = 42, plot_manager: any = None ):
+    def __init__(
+        self, 
+        shap_store: list, 
+        background_size: int = 100, 
+        max_eval_samples: int = 300, 
+        seed: int = 42, 
+        plot_manager: any = None,
+        models: list[str] | None = None,
+    ):
+        
         self.store = shap_store
         self.background_size = background_size
         self.max_eval_samples = max_eval_samples
         self.rng = np.random.default_rng(seed)
-        self.grouped = self._group()
+        self.grouped = self._group(models)
         self.plot_manager = plot_manager
 
-    def _group(self):
+    def _group(self, models: list[str] | None = None):
         g = defaultdict(list)
         for d in self.store:
+            if models is not None and d["model_name"] not in models:
+                continue
             g[d["model_name"]].append(d)
         return g
 

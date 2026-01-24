@@ -9,6 +9,7 @@ from sklearn.linear_model import LassoCV, ElasticNetCV
 from .config import FeatureSchema
 from .target_encoding import LeakageSafeTargetEncoder
 
+
 def make_ohe():
     encoder = None
     try:
@@ -17,6 +18,7 @@ def make_ohe():
         # sklearn < 1.2 fallback
         encoder = OneHotEncoder(handle_unknown="ignore", sparse=False)
     return encoder
+
 
 class IdentityTransformer(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
@@ -35,6 +37,7 @@ def make_identity_transformer():
         return FunctionTransformer(validate=False, feature_names_out="one-to-one")
     except TypeError:
         return IdentityTransformer()
+
 
 class PreprocessorBuilder:
     def __init__(self, schema: FeatureSchema):
@@ -70,26 +73,19 @@ class PreprocessorBuilder:
                 ))
             )
 
-        num_pipe = Pipeline(num_steps)
-
+        
+        pre = []
         if cat_encoding == "raw":
-            num_pipe = Pipeline([
-                ("identity", make_identity_transformer()),
-            ])
+            num_pipe = Pipeline([("identity", make_identity_transformer()),])
+            cat_pipe = Pipeline([("identity", make_identity_transformer()),])
 
-            cat_pipe = Pipeline([
-                ("identity", make_identity_transformer()),
-            ])
-
-            return ColumnTransformer(
-                transformers=[
-                    ("num", num_pipe, self.schema.num_cols),
-                    ("cat", cat_pipe, self.schema.cat_cols),
-                ],
-                remainder="drop",
-                verbose_feature_names_out=False,
-            )
-
+            pre = ColumnTransformer(transformers=[
+                                         ("num", num_pipe, self.schema.num_cols),
+                                         ("cat", cat_pipe, self.schema.cat_cols),],
+                                     remainder="drop",
+                                     verbose_feature_names_out=False)
+    
+        num_pipe = Pipeline(num_steps)
         # categorical pipeline
         if cat_encoding == "onehot":
             cat_pipe = make_ohe()

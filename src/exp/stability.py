@@ -1,4 +1,3 @@
-# src/exp/stability.py
 import numpy as np
 import pandas as pd
 from itertools import combinations
@@ -7,6 +6,7 @@ def jaccard(a: set, b: set) -> float:
     if not a and not b:
         return 1.0
     return len(a & b) / max(1, len(a | b))
+
 
 def feature_selection_stability(records: list) -> pd.DataFrame:
     """

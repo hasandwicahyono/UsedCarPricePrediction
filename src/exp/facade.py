@@ -16,6 +16,7 @@ from .data_io import DataReadConfig, read_csv_folder, coerce_dtypes, basic_clean
 from .plot_manager import PlotManager
 from .preprocess import PreprocessorBuilder
 
+
 def aggregate_hyperparams(param_dicts):
     """
     Aggregate hyperparameters across outer folds.
@@ -44,6 +45,7 @@ def aggregate_hyperparams(param_dicts):
 
     return aggregated
 
+
 class ExperimentFacade:
     def __init__(
         self,
@@ -71,6 +73,10 @@ class ExperimentFacade:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         payload = {}
+        out_path = out_dir / "best_hyperparameters.json"
+        if out_path.exists():
+            with open(out_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
 
         for model_name, params_per_fold in self.runner.best_params_.items():
             payload[model_name] = {
@@ -81,9 +87,8 @@ class ExperimentFacade:
                 "seed": self.cfg.seed,
             }
 
-        out_path = out_dir / "best_hyperparameters.json"
-        with open(out_path, "w") as f:
-            json.dump(payload, f, indent=2)
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
 
         print(f"[saved] {out_path.resolve()}")
 
@@ -124,20 +129,21 @@ class ExperimentFacade:
     def summary(self):
         return summarize_mean_std(self.runner.results_)
 
-    def significance(self, metric="MAE", baseline="RandomForest"):
-        return paired_tests(self.runner.results_, metric=metric, baseline=baseline)
+    def significance(self, metric="MAE", baseline="RandomForest", models: list[str] | None = None):
+        return paired_tests(self.runner.results_, metric=metric, baseline=baseline, models=models)
 
     def significance_matrix(self, metric="MAE"):
         return significance_matrix(self.runner.results_, metric=metric)
 
-    def shap(self, plot_dir: str = "outputs/figures"):
+    def shap(self, plot_dir: str = "outputs/figures", models: list[str] | None = None):
         pm = PlotManager(base_dir=plot_dir)
         return ShapAnalyzer(
             self.runner.shap_store_,
             background_size=self.cfg.shap_background_size,
             max_eval_samples=self.cfg.shap_max_eval_samples,
             seed=self.cfg.seed,
-            plot_manager=pm
+            plot_manager=pm,
+            models=models
         )
 
     def save_best_params(self, out_path: str = "outputs/best_params"):

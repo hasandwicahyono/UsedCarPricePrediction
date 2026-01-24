@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 
+
 @dataclass
 class TargetEncodingConfig:
     cols: List[str]
@@ -12,6 +13,7 @@ class TargetEncodingConfig:
     min_samples_leaf: int = 1
     noise_std: float = 0.0    # optional noise (set 0.0 for determinism)
     random_state: int = 42
+
 
 class LeakageSafeTargetEncoder(BaseEstimator, TransformerMixin):
     """

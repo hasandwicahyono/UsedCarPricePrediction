@@ -16,17 +16,6 @@ from .models import ModelFactory
 from .metrics import MetricStrategy
 from .metrics import make_metric
 
-PREPROCESS_POLICY = {
-    "LinearRegression": dict(cat_encoding="target", use_feature_selection=True),
-    "SVR":            dict(cat_encoding="target", use_feature_selection=True),
-    "NeuralNetwork":  dict(cat_encoding="target", use_feature_selection=True),
-
-    "DecisionTree":   dict(cat_encoding="onehot", use_feature_selection=False),
-    "RandomForest":   dict(cat_encoding="onehot", use_feature_selection=False),
-    "XGBoost":        dict(cat_encoding="onehot", use_feature_selection=False),  # start here
-    "CatBoost":       dict(cat_encoding="raw", use_feature_selection=False),  # start here  
-}
-
 # ======================================================
 # Utilities
 # ======================================================
@@ -52,6 +41,7 @@ def build_monotone_constraints(feature_names: list[str]) -> str:
             constraints.append(0)
 
     return "(" + ",".join(map(str, constraints)) + ")"
+
 
 def set_seed(seed: int):
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -98,18 +88,6 @@ class HyperparamSpace:
 
     def global_timeout(self) -> Optional[int]:
         return self.cfg.get("global", {}).get("timeout_sec") if self.cfg else None
-
-    def model_trials(self, model_name: str) -> Optional[int]:
-        if self.cfg is None:
-            return None
-        m = self.cfg.get("models", {}).get(model_name, {})
-        return m.get("n_trials")
-
-    def model_timeout(self, model_name: str) -> Optional[int]:
-        if self.cfg is None:
-            return None
-        m = self.cfg.get("models", {}).get(model_name, {})
-        return m.get("timeout_sec")
 
 
 # ======================================================
@@ -296,6 +274,7 @@ class NestedCVRunner:
         )
 
         builder = PreprocessorBuilder(self.schema)
+        default_policy = dict(cat_encoding="onehot", use_feature_selection=False)
         scores = []
         for step, (tr, va) in enumerate(inner_cv.split(X_train)):
             Xtr_raw = X_train.iloc[tr]
@@ -309,34 +288,38 @@ class NestedCVRunner:
             if self.cfg.preprocessing_cache and key in pre_cache:
                 pre, Xtr, Xva = pre_cache[key]
             else:
-                policy = PREPROCESS_POLICY.get(model_name, dict(cat_encoding="onehot", use_feature_selection=False))
+                policy = getattr(ModelFactory.MAP[model_name], "preprocess_policy", default_policy)
                 pre = builder.build(
                     cat_encoding=policy["cat_encoding"],
                     use_feature_selection=policy["use_feature_selection"],
                     seed=seed
                 )
-                ##pre = builder.build()
-                # pre = builder.build(use_feature_selection=use_fs)
                 Xtr = pre.fit_transform(Xtr_raw, ytr)
                 Xva = pre.transform(Xva_raw)
                 if self.cfg.preprocessing_cache:
                     pre_cache[key] = (pre, Xtr, Xva)
-            
-            if model_name == "CatBoost":
-                cat_features = [
-                    i for i, name in enumerate(pre.get_feature_names_out())
-                    if name in self.schema.cat_cols
-                ]
-                params["cat_features"] = cat_features
 
-            model = ModelFactory.create(model_name, seed=seed, params=params)
+            model = ModelFactory.create(
+                model_name, 
+                seed=seed, 
+                params=params,
+                residual_cfg=self.cfg.residuals.get(model_name)
+            )
             model.fit(Xtr, ytr, Xva, yva)
 
             pred_log = model.predict(Xva)
             pred_price = np.exp(pred_log) if self.cfg.log_target else pred_log
             #pred_price = np.exp(pred_log)
 
-            score = self.metric.compute(yva_price, pred_price)
+            # Guard against NaN/inf in predictions or targets
+            if not np.isfinite(pred_price).all() or not np.isfinite(yva_price).all():
+                return float("-inf") if self.metric.direction == "maximize" else float("inf")
+
+            mask = np.isfinite(pred_price) & np.isfinite(yva_price)
+            if mask.sum() < 2:
+                return float("-inf") if self.metric.direction == "maximize" else float("inf")
+
+            score = self.metric.compute(yva_price[mask], pred_price[mask])
             scores.append(score)
 
             # metric-aware pruning: only for safe loss-like metrics
@@ -362,6 +345,7 @@ class NestedCVRunner:
         )
 
         rows = []
+        default_policy = dict(cat_encoding="onehot", use_feature_selection=False)
         for ofold, (tr, te) in enumerate(outer_cv.split(self.X), start=1):
             Xtr_raw = self.X.iloc[tr]
             Xte_raw = self.X.iloc[te]
@@ -374,7 +358,8 @@ class NestedCVRunner:
             for model_name in self.model_names:
                 pre_cache = {}
                 study_name_custom = f"{model_name}_OuterFold_{ofold}"
-                study = self._create_study(seed=self.cfg.optuna_seed + ofold, study_name=study_name_custom)
+                study = self._create_study(seed=self.cfg.optuna_seed + ofold, 
+                                           study_name=study_name_custom)
 
                 coverage_params = extract_coverage_params_from_json(self.space, model_name)
                 coverage_tracker = CoverageTracker(coverage_params)
@@ -385,13 +370,6 @@ class NestedCVRunner:
                 )
 
                 callback = OptunaStoppingCallback(stopping_policy)
-
-                n_trials = self.space.model_trials(model_name)
-                if n_trials is None:
-                    n_trials = self.cfg.n_trials
-                timeout_sec = self.space.model_timeout(model_name)
-                if timeout_sec is None:
-                    timeout_sec = self.cfg.timeout_sec
 
                 study.optimize(
                     lambda t: self._inner_objective(
@@ -404,8 +382,8 @@ class NestedCVRunner:
                         pre_cache,
                         stopping_policy,
                     ),
-                    n_trials=n_trials,
-                    timeout=timeout_sec,
+                    n_trials=self.cfg.n_trials,
+                    timeout=self.cfg.timeout_sec,
                     callbacks=[callback],
                 )
 
@@ -422,11 +400,8 @@ class NestedCVRunner:
                 )
                 self.best_params_.setdefault(model_name, []).append(best_params)
 
-                # --- retrain on full outer train ---
-                policy = PREPROCESS_POLICY.get(
-                    model_name,
-                    dict(cat_encoding="onehot", use_feature_selection=False)
-                )
+                ## --- retrain on full outer train ---
+                policy = getattr(ModelFactory.MAP[model_name], "preprocess_policy", default_policy)
 
                 pre = PreprocessorBuilder(self.schema).build(
                     cat_encoding=policy["cat_encoding"],
@@ -442,27 +417,29 @@ class NestedCVRunner:
                     best_params["monotone_constraints"] = build_monotone_constraints(
                         list(feature_names)
                     )
-                if model_name == "CatBoost":
-                    best_params["cat_features"] = [
-                        i for i, name in enumerate(feature_names)
-                        if name in self.schema.cat_cols
-                    ]
 
-                model = ModelFactory.create(model_name, seed=fold_seed, params=best_params)
+                model = ModelFactory.create(
+                    model_name, 
+                    seed=fold_seed, 
+                    params=best_params,
+                    residual_cfg=self.cfg.residuals.get(model_name)
+                )
                 model.fit(Xtr, ytr_log, None, None)
 
                 num_pipe = pre.named_transformers_.get("num")
+                
                 num_feature_names, mask, coefs = None, None, None
+                
                 if num_pipe is not None:
                     num_feature_names = num_pipe.get_feature_names_out()
-                
-                if num_pipe is not None and "enet_fs" in num_pipe.named_steps:
-                    selector = num_pipe.named_steps["enet_fs"]
-                    mask = selector.get_support()
-                    est = selector.estimator_
-                    if hasattr(est, "coef_"):
-                        coefs = np.asarray(est.coef_)
-                
+
+                    if "enet_fs" in num_pipe.named_steps:
+                        selector = num_pipe.named_steps["enet_fs"]
+                        mask = selector.get_support()
+                        est = selector.estimator_
+                        if hasattr(est, "coef_"):
+                            coefs = np.asarray(est.coef_)
+                    
                 self.feature_stability_.append(
                     dict(
                         model_name=model_name,
@@ -495,7 +472,6 @@ class NestedCVRunner:
 
                 shap_model = model
                 shap_model_type = model.model_type
-                # ResidualStackedModel doesn't expose `.model`; SHAP supports base estimators only.
                 if hasattr(model, "base_model"):
                     shap_model = model.base_model
                     shap_model_type = model.base_model.model_type

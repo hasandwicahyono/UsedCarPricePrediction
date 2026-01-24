@@ -1,82 +1,192 @@
+from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import numpy as np
 import pandas as pd
 
-from sklearn.linear_model import LinearRegression, ElasticNet, QuantileRegressor
+# =======================
+# Base ML imports
+# =======================
+from sklearn.linear_model import (
+    LinearRegression,
+    ElasticNet,
+    QuantileRegressor,
+    HuberRegressor,
+)
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
+
 from xgboost import XGBRegressor
 from xgboost.callback import EarlyStopping
 from catboost import CatBoostRegressor
 
+# =======================
+# Deep learning
+# =======================
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.optimizers import Adam, AdamW, RMSprop, SGD
 
-STACKING_POLICY = {
-    "CatBoost": ["ElasticNet", "Quantile"],
-    "XGBoost": ["ElasticNet", "Quantile"],
-}
+from .metrics import make_metric
+
+# =====================================================
+# Base Strategy Registries
+# =====================================================
 
 class ModelStrategy(ABC):
-    model_type: str  # used by SHAP mapping
+    registry: Dict[str, type] = {}
+    model_type: str
+    preprocess_policy: dict = {}
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if hasattr(cls, "model_type"):
+            ModelStrategy.registry[cls.model_type] = cls
 
     @abstractmethod
     def fit(self, Xtr, ytr, Xva=None, yva=None): ...
+
     @abstractmethod
     def predict(self, Xte) -> np.ndarray: ...
 
+
+class ResidualStrategy(ABC):
+    registry: Dict[str, type] = {}
+    model_type: str
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if hasattr(cls, "model_type"):
+            ResidualStrategy.registry[cls.model_type] = cls
+
+    @abstractmethod
+    def fit(self, X, y, base_pred): ...
+
+    @abstractmethod
+    def predict(self, X): ...
+
+
+# =====================================================
+# Base Models
+# =====================================================
+
 class LinearRegressionStrategy(ModelStrategy):
     model_type = "LinearRegression"
-    def __init__(self, seed: int, params: Dict[str, Any]):
+    preprocess_policy = dict(cat_encoding="target", use_feature_selection=True)
+
+    def __init__(self, seed, params):
         self.model = LinearRegression(**params)
 
     def fit(self, Xtr, ytr, Xva=None, yva=None):
         self.model.fit(Xtr, ytr)
 
-    def predict(self, Xte):
-        return self.model.predict(Xte)
+    def predict(self, X):
+        return self.model.predict(X)
+
+
+class RandomForestStrategy(ModelStrategy):
+    model_type = "RandomForest"
+    preprocess_policy = dict(cat_encoding="onehot", use_feature_selection=False)
+
+    def __init__(self, seed, params):
+        self.model = RandomForestRegressor(random_state=seed, **params)
+
+    def fit(self, Xtr, ytr, Xva=None, yva=None):
+        self.model.fit(Xtr, ytr)
+
+    def predict(self, X):
+        return self.model.predict(X)
+
 
 class DecisionTreeStrategy(ModelStrategy):
     model_type = "DecisionTree"
+    preprocess_policy = dict(cat_encoding="onehot", use_feature_selection=False)
+
     def __init__(self, seed: int, params: Dict[str, Any]):
         self.model = DecisionTreeRegressor(random_state=seed, **params)
 
     def fit(self, Xtr, ytr, Xva=None, yva=None):
         self.model.fit(Xtr, ytr)
 
-    def predict(self, Xte):
-        return self.model.predict(Xte)
+    def predict(self, X):
+        return self.model.predict(X)
+    
 
-class RandomForestStrategy(ModelStrategy):
-    model_type = "RandomForest"
-    def __init__(self, seed: int, params: Dict[str, Any]):
-        self.model = RandomForestRegressor(random_state=seed, **params)
-
-    def fit(self, Xtr, ytr, Xva=None, yva=None):
-        self.model.fit(Xtr, ytr)
-
-    def predict(self, Xte):
-        return self.model.predict(Xte)
 
 class SVRStrategy(ModelStrategy):
     model_type = "SVR"
+    preprocess_policy = dict(cat_encoding="target", use_feature_selection=True)
+
     def __init__(self, seed: int, params: Dict[str, Any]):
         self.model = SVR(**params)
 
     def fit(self, Xtr, ytr, Xva=None, yva=None):
         self.model.fit(Xtr, ytr)
 
-    def predict(self, Xte):
-        return self.model.predict(Xte)
+    def predict(self, X):
+        return self.model.predict(X)
+    
+
+# =====================================================
+# Neural Network
+# =====================================================
+
+class KerasMLPStrategy(ModelStrategy):
+    model_type = "NeuralNetwork"
+    preprocess_policy = dict(cat_encoding="target", use_feature_selection=True)
+
+    def __init__(self, seed: int, params: dict):
+        tf.keras.backend.clear_session()
+        tf.keras.utils.set_random_seed(seed)
+        self.params = params
+        self.metric = make_metric(params.get("metric_name", "MAE"))
+        self.model = None
+
+    def _make_optimizer(self, name, lr, momentum, weight_decay):
+        return {
+            "adam": Adam(lr),
+            "adamw": AdamW(lr, weight_decay=weight_decay),
+            "rmsprop": RMSprop(lr, momentum=momentum),
+            "sgd": SGD(lr, momentum=momentum),
+        }[name.lower()]
+
+    def _build(self, dim: int):
+        p = self.params
+        model = Sequential()
+        for i in range(p.get("n_layers", 2)):
+            model.add(Dense(p[f"units_layer_{i+1}"], activation=p.get("activation", "relu")))
+        model.add(Dense(1))
+        model.compile(
+            optimizer=self._make_optimizer(
+                p.get("optimizer", "adam"),
+                p.get("learning_rate", 0.001),
+                p.get("momentum", 0.0),
+                p.get("weight_decay", 0.0),
+            ),
+            loss=p.get("loss", "mse"),
+        )
+        return model
+
+    def fit(self, Xtr, ytr, Xva=None, yva=None):
+        self.model = self._build(Xtr.shape[1])
+        self.model.fit(
+            Xtr, ytr,
+            validation_data=(Xva, yva) if Xva is not None else None,
+            epochs=100,
+            batch_size=256,
+            verbose=0,
+        )
+
+    def predict(self, X):
+        return self.model.predict(X, verbose=0).ravel()
 
 class XGBoostStrategy(ModelStrategy):
     model_type = "XGBoost"
-    def __init__(self, seed: int, params: Dict[str, Any]):
-        # allow fixed params from json: tree_method, n_jobs, etc.
+    preprocess_policy = dict(cat_encoding="onehot", use_feature_selection=False)
+
+    def __init__(self, seed, params):
         self.early_stopping_rounds = params.pop("early_stopping_rounds", None)
         self.model = XGBRegressor(random_state=seed, **params)
 
@@ -87,248 +197,91 @@ class XGBoostStrategy(ModelStrategy):
                     Xtr, ytr,
                     eval_set=[(Xva, yva)],
                     early_stopping_rounds=self.early_stopping_rounds,
-                    verbose=False
+                    verbose=False,
                 )
                 return
             except TypeError:
-                try:
-                    self.model.fit(
-                        Xtr, ytr,
-                        eval_set=[(Xva, yva)],
-                        callbacks=[EarlyStopping(rounds=self.early_stopping_rounds)],
-                        verbose=False
-                    )
-                    return
-                except TypeError:
-                    # Fallback for xgboost versions without early-stopping kwargs.
-                    self.model.fit(Xtr, ytr, eval_set=[(Xva, yva)], verbose=False)
-                    return
+                self.model.fit(
+                    Xtr, ytr,
+                    eval_set=[(Xva, yva)],
+                    callbacks=[EarlyStopping(rounds=self.early_stopping_rounds)],
+                    verbose=False,
+                )
+                return
         self.model.fit(Xtr, ytr)
 
-    def predict(self, Xte):
-        return self.model.predict(Xte)
+    def predict(self, X):
+        return self.model.predict(X)
 
-class CatBoostStrategy(ModelStrategy):
-    model_type = "CatBoost"
 
-    def __init__(self, seed: int, params: dict):
-        self.cat_features = params.pop("cat_features", None)
-        loss_function = params.pop("loss_function", "RMSE")
-        self.model = CatBoostRegressor(
-            random_seed=seed,
-            loss_function=loss_function,
-            verbose=False,
-            **params,
-        )
+# =====================================================
+# Residual Models
+# =====================================================
 
-    def fit(self, Xtr, ytr, Xva=None, yva=None):
-        if Xva is not None:
-            fit_kwargs = dict(eval_set=(Xva, yva), use_best_model=True)
-            if self.cat_features is not None:
-                fit_kwargs["cat_features"] = self.cat_features
-            self.model.fit(Xtr, ytr, **fit_kwargs)
-        else:
-            fit_kwargs = {}
-            if self.cat_features is not None:
-                fit_kwargs["cat_features"] = self.cat_features
-            self.model.fit(Xtr, ytr, **fit_kwargs)
+class ElasticNetResidual(ResidualStrategy):
+    model_type = "ElasticNet"
+
+    def __init__(self, seed=42, alpha=0.001, l1_ratio=0.5):
+        self.model = ElasticNet(alpha=alpha, l1_ratio=l1_ratio, random_state=seed)
+
+    def fit(self, X, y, base_pred):
+        self.model.fit(X, y - base_pred)
 
     def predict(self, X):
         return self.model.predict(X)
 
-class KerasMLPStrategy(ModelStrategy):
-    model_type = "NeuralNetwork"
 
-    def __init__(self, seed: int, params: dict):
-        tf.keras.backend.clear_session()
-        tf.keras.utils.set_random_seed(seed)
-        self.params = params
-        self.model = None
+class QuantileResidual(ResidualStrategy):
+    model_type = "Quantile"
 
-    def _make_optimizer(self, name, lr, momentum, weight_decay):
-        name = name.lower()
-        if name == "adam":
-            return Adam(learning_rate=lr)
-        if name == "adamw":
-            return AdamW(learning_rate=lr, weight_decay=weight_decay)
-        if name == "rmsprop":
-            return RMSprop(learning_rate=lr, momentum=momentum)
-        if name == "sgd":
-            return SGD(learning_rate=lr, momentum=momentum)
-        raise ValueError(f"Unsupported optimizer: {name}")
-
-    def _build(self, input_dim: int):
-        p = self.params
-
-        # ---- architecture ----
-        n_layers = p.get("n_layers", 2)
-        hidden_layer_sizes = tuple(
-            p[f"units_layer_{i+1}"] for i in range(n_layers)
-        )
-
-        activation = p.get("activation", "relu")
-        optimizer_name = p.get("optimizer", "adam")
-        learning_rate = p.get("learning_rate", 0.001)
-        momentum = p.get("momentum", 0.0)
-        weight_decay = p.get("weight_decay", 0.0)
-        loss = p.get("loss", "mean_squared_error")
-
-        model = Sequential()
-        for i, units in enumerate(hidden_layer_sizes):
-            if i == 0:
-                model.add(Dense(units, activation=activation, input_dim=input_dim))
-            else:
-                model.add(Dense(units, activation=activation))
-        model.add(Dense(1, activation="linear"))
-
-        opt = self._make_optimizer(
-            optimizer_name,
-            learning_rate,
-            momentum,
-            weight_decay
-        )
-
-        model.compile(
-            optimizer=opt,
-            loss=loss,
-            metrics=["mean_absolute_error", "mean_squared_error"]
-        )
-        return model
-
-    def fit(self, Xtr, ytr, Xva=None, yva=None):
-        self.model = self._build(Xtr.shape[1])
-
-        monitor_map = {
-            "MAE": "val_mean_absolute_error",
-            "MSE": "val_mean_squared_error",
-            "RMSE": "val_mean_squared_error",  # RMSE not a built-in metric unless you add one
-            "R2": "val_loss",                  # unless you implement R2 metric callback
-            "MedAE": "val_loss",
-        }
-        monitor = monitor_map.get(self.params.get("metric_name", "MAE"), "val_loss")
-
-        callbacks = []
-        if Xva is not None:
-            callbacks.append(
-                tf.keras.callbacks.EarlyStopping(
-                    monitor=monitor,
-                    mode="min",
-                    patience=self.params.get("early_stopping_patience", 10),
-                    restore_best_weights=True
-                )
-            )
-
-        self.model.fit(
-            Xtr,
-            ytr,
-            validation_data=(Xva, yva) if Xva is not None else None,
-            epochs=100,
-            batch_size=256,
-            callbacks=callbacks,
-            verbose=0
-        )
-
-    def predict(self, Xte):
-        return self.model.predict(Xte, verbose=0).ravel()
-    
-class ResidualStackedModel:
-    """
-    y_hat = base(X) + residual(X)
-    Assumes both models operate in the SAME target space (log-space here).
-    """
-
-    def __init__(self, base_model, residual_model):
-        self.base_model = base_model
-        self.residual_model = residual_model
-        self.model_type = f"{base_model.model_type}+Residual"
-        self.use_residual = True
-
-    def _has_non_numeric(self, X) -> bool:
-        try:
-            if isinstance(X, pd.DataFrame):
-                return not all(np.issubdtype(dt, np.number) for dt in X.dtypes)
-        except Exception:
-            pass
-        if isinstance(X, np.ndarray):
-            return X.dtype == object
-        return True
-
-    def fit(self, X, y, X_val=None, y_val=None):
-        # 1) fit base model
-        self.base_model.fit(X, y, X_val, y_val)
-
-        # 2) compute residuals on TRAIN ONLY
-        base_pred = self.base_model.predict(X)
-        residuals = y - base_pred
-
-        if np.std(residuals) < 1e-6:
-            self.use_residual = False
-            return
-
-        # 3) fit residual model (NO validation needed)
-        if self._has_non_numeric(X):
-            self.use_residual = False
-            return
-        try:
-            self.residual_model.fit(X, residuals, None, None)
-        except Exception:
-            self.use_residual = False
-
-    def predict(self, X):
-        base_pred = self.base_model.predict(X)
-        if not self.use_residual:
-            return base_pred
-        residual_pred = self.residual_model.predict(X)
-        return base_pred + residual_pred
-    
-class ElasticNetResidualModel:
-    def __init__(self, alpha=0.001, l1_ratio=0.5, seed=42):
-        self.model = ElasticNet(
-            alpha=alpha,
-            l1_ratio=l1_ratio,
-            random_state=seed
-        )
-        self.model_type = "ElasticNetResidual"
-
-    def fit(self, X, y, X_val=None, y_val=None):
-        self.model.fit(X, y)
-
-    def predict(self, X):
-        return self.model.predict(X)
-
-class QuantileResidualModel:
-    """
-    Learns Q_tau(residual | X)
-    """
-
-    model_type = "QuantileResidual"
-
-    def __init__(self, quantile: float = 0.5, alpha: float = 0.001):
-        self.quantile = quantile
+    def __init__(self, seed: int = 42, quantile=0.75, alpha=0.001):
         self.model = QuantileRegressor(
-            quantile=quantile,
-            alpha=alpha,
-            solver="highs"
+            quantile=quantile, alpha=alpha, solver="highs"
         )
 
-    def fit(self, X, y, X_val=None, y_val=None):
-        # y is residuals
-        self.model.fit(X, y)
+    def fit(self, X, y, base_pred):
+        self.model.fit(X, y - base_pred)
 
     def predict(self, X):
         return self.model.predict(X)
 
-class ModelFactory:
-    MAP = {
-        "LinearRegression": LinearRegressionStrategy,
-        "DecisionTree": DecisionTreeStrategy,
-        "RandomForest": RandomForestStrategy,
-        "SVR": SVRStrategy,
-        "XGBoost": XGBoostStrategy,
-        "NeuralNetwork": KerasMLPStrategy,
-        "CatBoost": CatBoostStrategy,
-    }
 
+class HuberResidual(ResidualStrategy):
+    model_type = "Huber"
+
+    def __init__(self, seed: int = 42, epsilon=1.35, alpha=0.0001):
+        self.model = HuberRegressor(epsilon=epsilon, alpha=alpha)
+
+    def fit(self, X, y, base_pred):
+        self.model.fit(X, y - base_pred)
+
+    def predict(self, X):
+        return self.model.predict(X)
+
+
+# =====================================================
+# Residual Wrapper
+# =====================================================
+
+class ResidualStackedModel(ModelStrategy):
+    def __init__(self, base: ModelStrategy, residual: ResidualStrategy):
+        self.base = base
+        self.residual = residual
+        self.model_type = f"{base.model_type}+{residual.model_type}"
+
+    def fit(self, X, y, Xva=None, yva=None):
+        self.base.fit(X, y, Xva, yva)
+        self.residual.fit(X, y, self.base.predict(X))
+
+    def predict(self, X):
+        return self.base.predict(X) + self.residual.predict(X)
+
+
+# =====================================================
+# Factory (policy injected externally)
+# =====================================================
+class ModelFactory:
+    MAP = ModelStrategy.registry
     NON_MODEL_KEYS = {
         "metric_name",
         "early_stopping_patience",
@@ -337,23 +290,13 @@ class ModelFactory:
     }
 
     @staticmethod
-    def _build_residual_model(kind: str, seed: int, params: Dict[str, Any] | None = None):
-        params = params or {}
-        if kind == "ElasticNet":
-            return ElasticNetResidualModel(
-                alpha=params.get("alpha", 0.001),
-                l1_ratio=params.get("l1_ratio", 0.5),
-                seed=seed,
-            )
-        if kind == "Quantile":
-            return QuantileResidualModel(
-                quantile=params.get("quantile", 0.75),
-                alpha=params.get("alpha", 0.001),
-            )
-
-    @staticmethod
-    def create(name: str, seed: int, params: Dict[str, Any]) -> ModelStrategy:
-        if name not in ModelFactory.MAP:
+    def create(
+        name: str, 
+        seed: int, 
+        params: Dict[str, Any],
+        residual_cfg: Optional[dict] = None
+    ) -> ModelStrategy:
+        if name not in ModelStrategy.registry:
             raise ValueError(f"Unknown model name: {name}")
 
         # -------------------------------------------------
@@ -367,31 +310,32 @@ class ModelFactory:
         # -------------------------------------------------
         # 2) Create base model
         # -------------------------------------------------
-        base_model = ModelFactory.MAP[name](seed, model_params)
+        cls = ModelStrategy.registry[name]
+        base_model = cls(seed, model_params)
 
         # -------------------------------------------------
         # 3) Apply residual stacking if configured
         # -------------------------------------------------
-        stack_cfg = STACKING_POLICY.get(name)
-        if stack_cfg is None:
+        if residual_cfg is None:
             return base_model
 
-        if isinstance(stack_cfg, dict):
-            residual_kind = stack_cfg.get("residual")
-        elif isinstance(stack_cfg, (list, tuple)):
-            residual_kind = stack_cfg[0] if stack_cfg else None
-        else:
-            residual_kind = None
+        # allow list/tuple config by taking the first residual spec
+        if isinstance(residual_cfg, (list, tuple)):
+            if not residual_cfg:
+                return base_model
+            residual_cfg = residual_cfg[0]
 
-        if residual_kind is None:
-            return base_model
-        
-        residual_model = ModelFactory._build_residual_model(
-            residual_kind,
-            seed
-        )
+        if not isinstance(residual_cfg, dict):
+            raise ValueError(
+                "residual_cfg must be a dict or list/tuple of dicts "
+                f"(got {type(residual_cfg).__name__})"
+            )
+
+        residual_kind = residual_cfg["kind"]
+        residual_cls = ResidualStrategy.registry[residual_kind]
+        residual = residual_cls(seed=seed, **residual_cfg.get("params", {}))
 
         return ResidualStackedModel(
-            base_model=base_model,
-            residual_model=residual_model
+            base=base_model,
+            residual=residual
         )
