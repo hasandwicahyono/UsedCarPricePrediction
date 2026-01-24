@@ -1,0 +1,15 @@
+{
+  "LinearRegression": {
+    "aggregated": {},
+    "per_outer_fold": [
+      {},
+      {},
+      {},
+      {},
+      {}
+    ],
+    "n_outer_folds": 5,
+    "metric_optimized": "maximize",
+    "seed": 42
+  }
+}

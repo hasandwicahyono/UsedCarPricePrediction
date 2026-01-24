@@ -1,0 +1,103 @@
+{
+  "global": {
+    "n_trials": 40,
+    "timeout_sec": null
+  },
+  "models": {
+    "DecisionTree": {
+      "fixed": {"max_depth": null},
+      "search": {
+        "min_samples_split": {"type": "int", "low": 2, "high": 50, "step": 2}
+      }
+    },
+    "RandomForest": {
+      "n_trials": 80, 
+      "fixed": {"n_jobs": -1, "max_depth": null},
+      "search": {
+        "n_estimators": {"type": "int", "low": 200, "high": 2000, "step": 10},
+        "min_samples_split": {"type": "int", "low": 2, "high": 50, "step": 2},
+        "min_samples_leaf": {"type": "int", "low": 1, "high": 10, "step": 1},
+        "max_features": {"type": "categorical", "choices": ["sqrt", 0.3, 0.5, 0.7, 0.8]}
+      }
+    },
+    "SVR": {
+      "fixed": {"kernel": "rbf"},
+      "search": {
+        "C": {"type": "categorical", "choices": [10, 20]},
+        "gamma": {"type": "float", "low": 0.1, "high": 1.0, "log": true},
+        "epsilon": {"type": "float", "low": 0.1, "high": 1.0, "log": true}
+      }
+    },
+    "XGBoost": {
+      "n_trials": 200,
+      "fixed": {"tree_method": "hist", "n_jobs": -1},
+      "search": {
+        "n_estimators": {"type": "int", "low": 1000, "high": 5000, "step": 50},
+        "max_depth": {"type": "int", "low": 2, "high": 8},
+        "min_child_weight": {"type": "int", "low": 1, "high": 15},
+        "learning_rate": {"type": "float", "low": 0.005, "high": 0.2, "log": true},
+        "subsample": {"type": "float", "low": 0.5, "high": 1.0},
+        "colsample_bytree": {"type": "float", "low": 0.5, "high": 1.0},
+        "gamma": {"type": "float", "low": 0.0, "high": 5.0},
+        "reg_alpha": {"type": "float", "low": 1e-6, "high": 10.0, "log": true},
+        "reg_lambda": {"type": "float", "low": 1e-4, "high": 50.0, "log": true},
+        "early_stopping_rounds": {"type": "int", "low": 50, "high": 300}
+      }
+    },
+    "CatBoost": {
+      "fixed": {
+        "loss_function": "RMSE"
+      },
+      "search": {
+        "depth": { "type": "int", "low": 4, "high": 10 },
+        "learning_rate": { "type": "float", "low": 0.02, "high": 0.3, "log": true },
+        "l2_leaf_reg": { "type": "float", "low": 1.0, "high": 10.0 },
+        "bagging_temperature": { "type": "float", "low": 0.0, "high": 1.0 },
+        "random_strength": { "type": "float", "low": 0.0, "high": 1.0 }
+      }
+    },
+    "NeuralNetwork": {
+      "fixed": {
+        "loss": "mean_squared_error"
+      },
+      "search": {
+        "optimizer": {
+          "type": "categorical",
+          "choices": ["adam", "adamW", "rmsprop", "sgd"]
+        },
+        "n_layers": { "type": "int", "low": 1, "high": 4 },
+
+        "units_layer_1": { "type": "int", "low": 32, "high": 256 },
+        "units_layer_2": { "type": "int", "low": 32, "high": 256 },
+        "units_layer_3": { "type": "int", "low": 32, "high": 256 },
+        "units_layer_4": { "type": "int", "low": 32, "high": 256 },
+
+        "activation": {
+          "type": "categorical",
+          "choices": ["relu", "gelu", "tanh", "sigmoid"]
+        },
+        "learning_rate": {
+          "type": "float",
+          "low": 0.0001,
+          "high": 0.01,
+          "log": true
+        },
+        "momentum": {
+          "type": "float",
+          "low": 0.0,
+          "high": 0.95
+        },
+        "weight_decay": {
+          "type": "float",
+          "low": 0.000001,
+          "high": 0.001,
+          "log": true
+        }
+      }
+    },
+    "LinearRegression": {
+      "fixed": {},
+      "search": {}
+    }
+  }
+}

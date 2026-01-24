@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "outer_folds": 5,
+    "inner_folds": 5,
+    "n_trials": 40,
+    "log_target": true
+  },
+  "best_params": [
+    {
+      "outer_fold": 1,
+      "model": "LinearRegression",
+      "params": {}
+    },
+    {
+      "outer_fold": 2,
+      "model": "LinearRegression",
+      "params": {}
+    },
+    {
+      "outer_fold": 3,
+      "model": "LinearRegression",
+      "params": {}
+    },
+    {
+      "outer_fold": 4,
+      "model": "LinearRegression",
+      "params": {}
+    },
+    {
+      "outer_fold": 5,
+      "model": "LinearRegression",
+      "params": {}
+    }
+  ]
+}
