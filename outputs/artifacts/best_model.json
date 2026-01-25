@@ -1,0 +1,31 @@
+{
+  "best_model": "DecisionTree",
+  "metric": "r2",
+  "metric_opt": "maximize",
+  "residual_config": {
+    "XGBoost": [
+      {
+        "kind": "Huber",
+        "params": {
+          "epsilon": 1.5
+        }
+      }
+    ],
+    "RandomForest": [
+      {
+        "kind": "PseudoHuber",
+        "params": {
+          "n_estimators": 200,
+          "max_depth": 2,
+          "learning_rate": 0.05,
+          "subsample": 0.8,
+          "colsample_bytree": 0.8,
+          "reg_alpha": 0.1,
+          "reg_lambda": 1.0,
+          "tree_method": "hist",
+          "n_jobs": -1
+        }
+      }
+    ]
+  }
+}

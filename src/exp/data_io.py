@@ -67,7 +67,12 @@ def read_csv_folder(cfg: DataReadConfig) -> pd.DataFrame:
 
     frames = []
     for p in files:
-        df = pd.read_csv(p, encoding=cfg.encoding, sep=cfg.sep)
+        read_kwargs = {}
+        if cfg.encoding is not None:
+            read_kwargs["encoding"] = cfg.encoding
+        if cfg.sep is not None:
+            read_kwargs["sep"] = cfg.sep
+        df = pd.read_csv(p, **read_kwargs)
 
         # Rename the 'tax(£)' column to 'tax' if it exists.
         if 'tax(£)' in df.columns:

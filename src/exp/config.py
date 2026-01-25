@@ -1,11 +1,36 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+from .schema_utils import sanitize_columns, infer_schema
+import pandas as pd
 
 @dataclass(frozen=True)
 class FeatureSchema:
     target: str
     num_cols: List[str]
     cat_cols: List[str]
+    mapping: Optional[dict] = None
+
+    @classmethod
+    def auto(cls, df, target):
+        num_cols = df.select_dtypes(include="number").columns.drop(target).tolist()
+        cat_cols = df.select_dtypes(exclude="number").columns.tolist()
+        return cls(target=target, num_cols=num_cols, cat_cols=cat_cols)
+
+    @classmethod
+    def from_dataframe(
+        cls,
+        df: pd.DataFrame,
+        target: str,
+        normalize: bool = True,
+    ) -> "FeatureSchema":
+        """
+        Auto-detect schema from raw dataframe.
+        """
+        if normalize:
+            df, mapping = sanitize_columns(df)
+
+        target, num_cols, cat_cols = infer_schema(df, target)
+        return cls(target=target, num_cols=num_cols, cat_cols=cat_cols, mapping=mapping)
 
 @dataclass
 class ExperimentConfig:
@@ -30,15 +55,41 @@ class ExperimentConfig:
     metric_opt: str = "maximize"  # or "maximize"
 
     # Residual Stacking
-    residuals: dict = field(default_factory=lambda: {
+    residuals: Dict[str, List[Dict[str, Any]]] = field(default_factory=lambda: {
         "XGBoost": [
-            {"kind": "Quantile", "params": {"quantile": 0.9}},
-            {"kind": "ElasticNet"}
+            {"kind": "Huber", "params": {"epsilon": 1.5}},
+            #{
+            #    "kind": "PseudoHuber",
+            #    "params": {
+            #        "n_estimators": 200,
+            #        "max_depth": 2,
+            #        "learning_rate": 0.05,
+            #        "subsample": 0.8,
+            #        "colsample_bytree": 0.8,
+            #        "reg_alpha": 0.1,
+            #        "reg_lambda": 1.0,
+            #        "tree_method": "hist",
+            #        "n_jobs": -1,
+            #    },
+            #},
         ],
         "RandomForest": [
-            {"kind": "Huber", "params": {"epsilon": 1.5}},
-            {"kind": "ElasticNet"}
-        ]
+            #{"kind": "Huber", "params": {"epsilon": 1.5}},
+            {
+                "kind": "PseudoHuber",
+                "params": {
+                    "n_estimators": 200,
+                    "max_depth": 2,
+                    "learning_rate": 0.05,
+                    "subsample": 0.8,
+                    "colsample_bytree": 0.8,
+                    "reg_alpha": 0.1,
+                    "reg_lambda": 1.0,
+                    "tree_method": "hist",
+                    "n_jobs": -1,
+                },
+            },
+        ],
     })
 
     # Pruning
@@ -57,11 +108,8 @@ class ExperimentConfig:
         # --- auto-derive optimization direction ---
         if self.metric_opt is None:
             metric = self.metric_name.lower()
-            if metric in {"r2", "r^2", "negmse"}:
-                self.metric_opt = "maximize"
-            else:
-                # MAE, RMSE, MSE, MedAE, etc.
-                self.metric_opt = "minimize"
+            # Set direction of R2 or Negative MSE into maximization. Otherwise, minimization.
+            self.metric_opt = "maximize" if metric in {"r2", "r^2", "negmse"} else "minimize"
 
         # --- validate ---
         if self.metric_opt not in ("minimize", "maximize"):

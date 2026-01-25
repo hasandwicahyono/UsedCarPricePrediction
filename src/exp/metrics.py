@@ -90,9 +90,6 @@ class NegMSEMetric(BaseMetric):
     def compute(self, y_true, y_pred) -> float:
         return -float(mean_squared_error(y_true, y_pred))
     
-    def supports_pruning(self) -> bool:
-        return False
-    
 
 def make_metric(metric_name: str) -> MetricStrategy:
     m = metric_name.lower()

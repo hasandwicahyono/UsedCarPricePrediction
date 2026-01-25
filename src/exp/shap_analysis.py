@@ -54,10 +54,23 @@ class ShapAnalyzer:
         X_all, shap_all = [], []
         feature_names = self.grouped[model_name][0]["feature_names"]
 
+        # Align features across folds (one-hot can differ by fold).
+        all_feature_lists = [d.get("feature_names", feature_names) for d in self.grouped[model_name]]
+        common = set(all_feature_lists[0])
+        for fn in all_feature_lists[1:]:
+            common &= set(fn)
+        if not common:
+            raise ValueError(f"No common features found across folds for {model_name}")
+        common_ordered = [f for f in all_feature_lists[0] if f in common]
+
         for item in self.grouped[model_name]:
             X = item["X_test"]
             model = item["model"]
             model_type = item["model_type"]
+            fn_item = item.get("feature_names", feature_names)
+            if isinstance(fn_item, np.ndarray):
+                fn_item = fn_item.tolist()
+            index_map = [fn_item.index(f) for f in common_ordered]
 
             # background
             bg_n = min(self.background_size, X.shape[0])
@@ -73,10 +86,11 @@ class ShapAnalyzer:
             explainer = self._explainer(model_type, model, X_bg)
             shap_vals = explainer.shap_values(X_eval)
 
-            X_all.append(X_eval)
-            shap_all.append(shap_vals)
+            X_all.append(X_eval[:, index_map])
+            shap_vals = np.asarray(shap_vals)
+            shap_all.append(shap_vals[:, index_map])
 
-        return np.vstack(X_all), np.vstack(shap_all), feature_names
+        return np.vstack(X_all), np.vstack(shap_all), common_ordered
 
     def beeswarm(self, model_name: str, max_display: int = 20, figsize=(10, 6), save: bool = True):
         X, sv, fn = self.compute(model_name)

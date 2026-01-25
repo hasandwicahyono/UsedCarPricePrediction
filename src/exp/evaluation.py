@@ -1,7 +1,19 @@
 import pandas as pd
+import pandas.errors as pd_errors
 from scipy.stats import ttest_rel, wilcoxon
 
-def summarize_mean_std(df_results: pd.DataFrame, decimals: int = 4) -> pd.DataFrame:
+def _ensure_pandas4warning():
+    # Work around mixed pandas versions where core code expects Pandas4Warning.
+    if not hasattr(pd_errors, "Pandas4Warning"):
+        class Pandas4Warning(Warning):
+            pass
+        pd_errors.Pandas4Warning = Pandas4Warning
+
+def summarize_mean_std(
+    df_results: pd.DataFrame,
+    decimals: int = 4,
+    format: bool = False,
+) -> pd.DataFrame:
     s = (
         df_results
         .groupby("model")[["R2","MAE","MedAE","MSE","RMSE"]]
@@ -10,9 +22,40 @@ def summarize_mean_std(df_results: pd.DataFrame, decimals: int = 4) -> pd.DataFr
     )
     s.columns = ["model"] + [f"{m}_{stat}" for (m, stat) in s.columns[1:]]
     num_cols = [c for c in s.columns if c != "model"]
-    fmt = f"{{:,.{decimals}f}}"
-    s[num_cols] = s[num_cols].applymap(lambda x: fmt.format(x))
+    if format:
+        fmt = f"{{:,.{decimals}f}}"
+        def _format_cols(df: pd.DataFrame) -> pd.DataFrame:
+            try:
+                return df.applymap(lambda x: fmt.format(x))
+            except AttributeError:
+                # fallback for pandas builds without DataFrame.applymap
+                return df.map(lambda x: fmt.format(x))
+
+        s[num_cols] = _format_cols(s[num_cols])
     return s
+
+
+def match_one(pivot: pd.DataFrame, name: str) -> str | None:
+    if name in pivot.columns:
+        return name
+    matches = [c for c in pivot.columns if c.startswith(f"{name}+")]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous model name '{name}'. Matches: {matches}"
+        )
+    return None
+    
+def match_many(pivot: pd.DataFrame, names: list[str]) -> list[str]:
+    out = []
+    for n in names:
+        if n in pivot.columns:
+            out.append(n)
+            continue
+        matches = [c for c in pivot.columns if c.startswith(f"{n}+")]
+        out.extend(matches)
+    return out
 
 
 def paired_tests(
@@ -21,20 +64,28 @@ def paired_tests(
     baseline: str = "RandomForest",
     models: list[str] | None = None,
 ) -> pd.DataFrame:
+    _ensure_pandas4warning()
     pivot = df_results.pivot(index="outer_fold", columns="model", values=metric)
+
+    baseline_col = match_one(pivot, baseline)
+    if baseline_col is None:
+        raise ValueError(
+            f"Baseline '{baseline}' not found. Available: {list(pivot.columns)}"
+        )
+
     if models is not None:
-        keep = [m for m in models if m in pivot.columns]
-        if baseline not in keep and baseline in pivot.columns:
-            keep = [baseline] + keep
+        keep = match_many(pivot, models)
+        if baseline_col not in keep:
+            keep = [baseline_col] + keep
         pivot = pivot[keep]
-    base = pivot[baseline]
+    base = pivot[baseline_col]
     out = []
     for m in pivot.columns:
-        if m == baseline:
+        if m == baseline_col:
             continue
         out.append({
             "metric": metric,
-            "baseline": baseline,
+            "baseline": baseline_col,
             "model": m,
             "paired_t_p": float(ttest_rel(pivot[m], base).pvalue),
             "wilcoxon_p": float(wilcoxon(pivot[m], base).pvalue),
@@ -46,6 +97,7 @@ def paired_tests(
 
 
 def significance_matrix(df_results: pd.DataFrame, metric: str = "MAE") -> pd.DataFrame:
+    _ensure_pandas4warning()
     pivot = df_results.pivot(index="outer_fold", columns="model", values=metric)
     models = list(pivot.columns)
     out = []

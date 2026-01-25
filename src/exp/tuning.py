@@ -15,6 +15,8 @@ from .preprocess import PreprocessorBuilder
 from .models import ModelFactory
 from .metrics import MetricStrategy
 from .metrics import make_metric
+from .schema_utils import sanitize_columns, infer_schema
+import re
 
 # ======================================================
 # Utilities
@@ -31,11 +33,11 @@ def build_monotone_constraints(feature_names: list[str]) -> str:
     constraints = []
 
     for f in feature_names:
-        if f.startswith("mileage"):
-            constraints.append(-1)   # higher mileage → lower price
-        elif f.startswith("year"):
-            constraints.append(+1)   # newer → higher price
-        elif f.startswith("engine_size"):
+        if re.search(r"mileage|odometer|km", f, re.I):
+            constraints.append(-1)
+        elif re.search(r"year", f, re.I):
+            constraints.append(+1)
+        elif re.search(r"engine|displacement", f, re.I):
             constraints.append(+1)
         else:
             constraints.append(0)
@@ -64,6 +66,12 @@ def suggest_from_space(trial: optuna.Trial, space: Dict[str, Any]) -> Dict[str, 
         else:
             raise ValueError(f"Unsupported hyperparameter type: {t}")
     return params
+
+
+def model_label(name, residual_cfg):
+    if residual_cfg is None:
+        return name
+    return f"{name}+{residual_cfg['kind']}"
 
 
 # ======================================================
@@ -209,7 +217,19 @@ class NestedCVRunner:
         hparam_json: Optional[str] = None,
     ):
         self.df = df.copy()
-        self.schema = schema
+        # sanitize columns
+        self.df, self.column_mapping_ = sanitize_columns(self.df)
+        # infer schema automatically
+        target, num_cols, cat_cols = infer_schema(
+            self.df,
+            target=schema.target
+        )
+
+        self.schema = FeatureSchema(
+            target=target,
+            num_cols=num_cols,
+            cat_cols=cat_cols
+        )
         self.cfg = cfg
         self.model_names = model_names
         self.space = HyperparamSpace(hparam_json)
@@ -226,6 +246,7 @@ class NestedCVRunner:
         self.best_params_ = {}
         self.shap_store_ = []
         self.feature_stability_ = []
+        self.expanded_models = self._expand_models()
 
         self.metric = make_metric(self.cfg.metric_name)
 
@@ -233,6 +254,17 @@ class NestedCVRunner:
         unknown = set(self.model_names) - valid_models
         if unknown:
             raise ValueError(f"Unknown model names: {unknown}")
+
+    def _expand_models(self):
+        expanded = []
+        for m in self.model_names:
+            residuals = self.cfg.residuals.get(m)
+            if not residuals:
+                expanded.append((m, None))
+            else:
+                for r in residuals:
+                    expanded.append((m, r))
+        return expanded
 
     def _prepare_xy(self):
         y = self.df[self.schema.target].astype(float).values
@@ -256,6 +288,7 @@ class NestedCVRunner:
         self,
         trial: optuna.Trial,
         model_name: str,
+        residual_cfg: Optional[dict],
         X_train: pd.DataFrame,
         y_train_log: np.ndarray,
         y_train_price: np.ndarray,
@@ -303,13 +336,12 @@ class NestedCVRunner:
                 model_name, 
                 seed=seed, 
                 params=params,
-                residual_cfg=self.cfg.residuals.get(model_name)
+                residual_cfgs=[residual_cfg] if residual_cfg else None
             )
             model.fit(Xtr, ytr, Xva, yva)
 
             pred_log = model.predict(Xva)
             pred_price = np.exp(pred_log) if self.cfg.log_target else pred_log
-            #pred_price = np.exp(pred_log)
 
             # Guard against NaN/inf in predictions or targets
             if not np.isfinite(pred_price).all() or not np.isfinite(yva_price).all():
@@ -328,7 +360,8 @@ class NestedCVRunner:
                 if trial.should_prune():
                     stopping_policy.on_trial_pruned()
                     raise optuna.TrialPruned()
-
+    
+        trial.set_user_attr("residual_cfg", residual_cfg)
         return float(np.mean(scores)) #float(np.mean(maes))
 
     def run(self):
@@ -355,13 +388,17 @@ class NestedCVRunner:
 
             fold_seed = self.cfg.seed + ofold
 
-            for model_name in self.model_names:
+            for model_name, residual_cfg in self.expanded_models:
                 pre_cache = {}
-                study_name_custom = f"{model_name}_OuterFold_{ofold}"
+                residual_tag = residual_cfg["kind"] if residual_cfg is not None else "base"
+                study_name_custom = f"{model_name}_OuterFold_{ofold}_residual_cfg_{residual_tag}"
                 study = self._create_study(seed=self.cfg.optuna_seed + ofold, 
                                            study_name=study_name_custom)
 
-                coverage_params = extract_coverage_params_from_json(self.space, model_name)
+                coverage_params = extract_coverage_params_from_json(self.space, 
+                                                                    model_label(model_name, 
+                                                                                residual_cfg))
+
                 coverage_tracker = CoverageTracker(coverage_params)
                 stopping_policy = CoverageAwareEarlyStoppingPolicy(
                     patience=self.cfg.early_stopping_patience,
@@ -375,6 +412,7 @@ class NestedCVRunner:
                     lambda t: self._inner_objective(
                         t,
                         model_name,
+                        residual_cfg,
                         Xtr_raw,
                         ytr_log,
                         ytr_price,
@@ -400,6 +438,8 @@ class NestedCVRunner:
                 )
                 self.best_params_.setdefault(model_name, []).append(best_params)
 
+                best_residual_cfg = study.best_trial.user_attrs.get("residual_cfg")
+
                 ## --- retrain on full outer train ---
                 policy = getattr(ModelFactory.MAP[model_name], "preprocess_policy", default_policy)
 
@@ -408,6 +448,7 @@ class NestedCVRunner:
                     use_feature_selection=policy["use_feature_selection"],
                     seed=fold_seed
                 )
+                
                 Xtr = pre.fit_transform(Xtr_raw, ytr_log)
                 Xte = pre.transform(Xte_raw)
                 
@@ -422,7 +463,7 @@ class NestedCVRunner:
                     model_name, 
                     seed=fold_seed, 
                     params=best_params,
-                    residual_cfg=self.cfg.residuals.get(model_name)
+                    residual_cfgs=[best_residual_cfg] if best_residual_cfg else None
                 )
                 model.fit(Xtr, ytr_log, None, None)
 
@@ -458,10 +499,11 @@ class NestedCVRunner:
                 mse = mean_squared_error(yte_price, pred_price)
                 rmse = np.sqrt(mse)
 
+                label = model_label(model_name, residual_cfg)
                 rows.append(
                     dict(
                         outer_fold=ofold,
-                        model=model_name,
+                        model=label,
                         R2=r2,
                         MAE=mae,
                         MedAE=medae,
@@ -471,7 +513,7 @@ class NestedCVRunner:
                 )
 
                 shap_model = model
-                shap_model_type = model.model_type
+                shap_model_type = label
                 if hasattr(model, "base_model"):
                     shap_model = model.base_model
                     shap_model_type = model.base_model.model_type

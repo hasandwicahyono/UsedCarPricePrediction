@@ -62,11 +62,40 @@ class ExperimentFacade:
         self.model_names = list(model_names)
 
     def run(self):
-        self.runner.run()
+        self.results_ = self.runner.run()
         self._save_best_hyperparams()
         self._refit_and_save_models()
-        self.results_ = self.runner.results_
+        self._save_best_model_artifact()
         return self.results_
+
+    def _save_best_model_artifact(self, out_dir="outputs/artifacts"):
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # select best by metric
+        metric = self.cfg.metric_name.upper()
+        ascending = self.cfg.metric_opt == "minimize"
+
+        summary = (
+            self.results_
+            .groupby("model")[metric]
+            .mean()
+            .sort_values(ascending=ascending)
+        )
+
+        best_model = summary.index[0]
+
+        artifact = {
+            "best_model": best_model,
+            "metric": self.cfg.metric_name,
+            "metric_opt": self.cfg.metric_opt,
+            "residual_config": self.cfg.residuals,
+        }
+
+        with open(out_dir / "best_model.json", "w") as f:
+            json.dump(artifact, f, indent=2)
+
+        return artifact
 
     def _save_best_hyperparams(self, out_dir="outputs/hyperparameters"):
         out_dir = Path(out_dir)
@@ -135,7 +164,7 @@ class ExperimentFacade:
     def significance_matrix(self, metric="MAE"):
         return significance_matrix(self.runner.results_, metric=metric)
 
-    def shap(self, plot_dir: str = "outputs/figures", models: list[str] | None = None):
+    def shap(self, plot_dir: str = "outputs/figures/shap", models: list[str] | None = None):
         pm = PlotManager(base_dir=plot_dir)
         return ShapAnalyzer(
             self.runner.shap_store_,
@@ -168,13 +197,20 @@ class ExperimentFacade:
     def from_folder(
         cls,
         data_cfg: DataReadConfig,
-        schema: FeatureSchema,
+        target: str,
         cfg: ExperimentConfig,
         model_names: List[str],
         hparam_json: Optional[str] = None,
         dropna_target: bool = True
     ):
         df = read_csv_folder(data_cfg)
-        df = basic_clean(df, target=schema.target, dropna_target=dropna_target)
+        df = basic_clean(df, target=target, dropna_target=dropna_target)
+        
+        schema = FeatureSchema.from_dataframe(
+            df,
+            target=target,
+            normalize=True,
+        )
+        print(f"[schema]\n  numerical cols: {schema.num_cols}\n  categorical cols: {schema.cat_cols}\n  target col: {[target]}\n  mapping: {schema.mapping}")
         df = coerce_dtypes(df, numeric_cols=schema.num_cols, categorical_cols=schema.cat_cols)
         return cls(df=df, schema=schema, cfg=cfg, model_names=model_names, hparam_json=hparam_json)

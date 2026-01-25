@@ -62,10 +62,10 @@ class ResidualStrategy(ABC):
             ResidualStrategy.registry[cls.model_type] = cls
 
     @abstractmethod
-    def fit(self, X, y, base_pred): ...
+    def fit(self, X, residuals, X_val=None, residuals_val=None): ...
 
     @abstractmethod
-    def predict(self, X): ...
+    def predict(self, X) -> np.ndarray: ...
 
 
 # =====================================================
@@ -113,7 +113,6 @@ class DecisionTreeStrategy(ModelStrategy):
     def predict(self, X):
         return self.model.predict(X)
     
-
 
 class SVRStrategy(ModelStrategy):
     model_type = "SVR"
@@ -201,13 +200,24 @@ class XGBoostStrategy(ModelStrategy):
                 )
                 return
             except TypeError:
-                self.model.fit(
-                    Xtr, ytr,
-                    eval_set=[(Xva, yva)],
-                    callbacks=[EarlyStopping(rounds=self.early_stopping_rounds)],
-                    verbose=False,
-                )
-                return
+                try:
+                    self.model.fit(
+                        Xtr, ytr,
+                        eval_set=[(Xva, yva)],
+                        callbacks=[EarlyStopping(rounds=self.early_stopping_rounds)],
+                        verbose=False,
+                    )
+                    return
+                except TypeError:
+                    try:
+                        self.model.fit(
+                            Xtr, ytr,
+                            eval_set=[(Xva, yva)],
+                            verbose=False,
+                        )
+                        return
+                    except TypeError:
+                        pass
         self.model.fit(Xtr, ytr)
 
     def predict(self, X):
@@ -221,11 +231,11 @@ class XGBoostStrategy(ModelStrategy):
 class ElasticNetResidual(ResidualStrategy):
     model_type = "ElasticNet"
 
-    def __init__(self, seed=42, alpha=0.001, l1_ratio=0.5):
-        self.model = ElasticNet(alpha=alpha, l1_ratio=l1_ratio, random_state=seed)
+    def __init__(self, seed=42, **params: Any):#alpha=0.001, l1_ratio=0.5):
+        self.model = ElasticNet(alpha=params.get("alpha", 0.001), l1_ratio=params.get("l1_ratio", 0.5), random_state=seed)
 
-    def fit(self, X, y, base_pred):
-        self.model.fit(X, y - base_pred)
+    def fit(self, X, residuals, X_val=None, residuals_val=None):
+        self.model.fit(X, residuals)
 
     def predict(self, X):
         return self.model.predict(X)
@@ -234,13 +244,13 @@ class ElasticNetResidual(ResidualStrategy):
 class QuantileResidual(ResidualStrategy):
     model_type = "Quantile"
 
-    def __init__(self, seed: int = 42, quantile=0.75, alpha=0.001):
+    def __init__(self, seed: int = 42, **params: Any):#quantile=0.75, alpha=0.001):
         self.model = QuantileRegressor(
-            quantile=quantile, alpha=alpha, solver="highs"
+            quantile=params.get("quantile", 0.75), alpha=params.get("alpha", 0.001), solver="highs"
         )
 
-    def fit(self, X, y, base_pred):
-        self.model.fit(X, y - base_pred)
+    def fit(self, X, residuals, X_val=None, residuals_val=None):
+        self.model.fit(X, residuals)
 
     def predict(self, X):
         return self.model.predict(X)
@@ -249,11 +259,48 @@ class QuantileResidual(ResidualStrategy):
 class HuberResidual(ResidualStrategy):
     model_type = "Huber"
 
-    def __init__(self, seed: int = 42, epsilon=1.35, alpha=0.0001):
-        self.model = HuberRegressor(epsilon=epsilon, alpha=alpha)
+    def __init__(self, seed: int = 42, **params: Any):#epsilon=1.35, alpha=0.0001):
+        self.model = HuberRegressor(epsilon=params.get("epsilon", 1.35), alpha=params.get("alpha", 0.0001))
 
-    def fit(self, X, y, base_pred):
-        self.model.fit(X, y - base_pred)
+    def fit(self, X, residuals, X_val=None, residuals_val=None):
+        self.model.fit(X, residuals)
+
+    def predict(self, X):
+        return self.model.predict(X)
+
+
+class PseudoHuberXGBResidualModel(ResidualStrategy):
+    """
+    Robust non-linear residual model using pseudo-Huber loss.
+    Designed to dominate linear Huber when residuals are regime-dependent.
+    """
+
+    model_type = "PseudoHuber"
+
+    def __init__(self, seed: int = 42, **params: Any):
+        self.model = XGBRegressor(
+            random_state=seed,
+            objective="reg:pseudohubererror",
+            n_estimators=params.get("n_estimators", 300),
+            max_depth=params.get("max_depth", 3),
+            learning_rate=params.get("learning_rate", 0.05),
+            subsample=params.get("subsample", 0.9),
+            colsample_bytree=params.get("colsample_bytree", 0.9),
+            reg_alpha=params.get("reg_alpha", 0.0),
+            reg_lambda=params.get("reg_lambda", 1.0),
+            tree_method=params.get("tree_method", "hist"),
+            n_jobs=params.get("n_jobs", -1),
+        )
+
+    def fit(self, X, residuals, X_val=None, residuals_val=None):
+        if X_val is not None:
+            self.model.fit(
+                X, residuals,
+                eval_set=[(X_val, residuals_val)],
+                verbose=False
+            )
+        else:
+            self.model.fit(X, residuals)
 
     def predict(self, X):
         return self.model.predict(X)
@@ -264,17 +311,38 @@ class HuberResidual(ResidualStrategy):
 # =====================================================
 
 class ResidualStackedModel(ModelStrategy):
-    def __init__(self, base: ModelStrategy, residual: ResidualStrategy):
+    def __init__(self, base: ModelStrategy, residuals: list[ResidualStrategy]):
         self.base = base
-        self.residual = residual
-        self.model_type = f"{base.model_type}+{residual.model_type}"
+        self.residuals = residuals
+        self.model_type = (
+            base.model_type + "+" + "+".join(r.model_type for r in residuals)
+        )
 
     def fit(self, X, y, Xva=None, yva=None):
         self.base.fit(X, y, Xva, yva)
-        self.residual.fit(X, y, self.base.predict(X))
+
+        current_pred = self.base.predict(X)
+        current_val_pred = (
+            self.base.predict(Xva) if Xva is not None else None
+        )
+
+        for r in self.residuals:
+            residuals = y - current_pred
+            residuals_val = (
+                yva - current_val_pred if Xva is not None else None
+            )
+
+            r.fit(X, residuals, Xva, residuals_val)
+
+            current_pred = current_pred + r.predict(X)
+            if Xva is not None:
+                current_val_pred = current_val_pred + r.predict(Xva)
 
     def predict(self, X):
-        return self.base.predict(X) + self.residual.predict(X)
+        pred = self.base.predict(X)
+        for r in self.residuals:
+            pred = pred + r.predict(X)
+        return pred
 
 
 # =====================================================
@@ -294,48 +362,20 @@ class ModelFactory:
         name: str, 
         seed: int, 
         params: Dict[str, Any],
-        residual_cfg: Optional[dict] = None
+        residual_cfgs: Optional[list] = None
     ) -> ModelStrategy:
+        
         if name not in ModelStrategy.registry:
             raise ValueError(f"Unknown model name: {name}")
 
-        # -------------------------------------------------
-        # 1) Split params: model vs training/meta
-        # -------------------------------------------------
-        model_params = {
-            k: v for k, v in params.items()
-            if k not in ModelFactory.NON_MODEL_KEYS
-        }
+        base = ModelStrategy.registry[name](seed, params)
 
-        # -------------------------------------------------
-        # 2) Create base model
-        # -------------------------------------------------
-        cls = ModelStrategy.registry[name]
-        base_model = cls(seed, model_params)
+        if not residual_cfgs:
+            return base
 
-        # -------------------------------------------------
-        # 3) Apply residual stacking if configured
-        # -------------------------------------------------
-        if residual_cfg is None:
-            return base_model
+        residuals = []
+        for cfg in residual_cfgs:
+            cls = ResidualStrategy.registry[cfg["kind"]]
+            residuals.append(cls(seed=seed, **cfg.get("params", {})))
 
-        # allow list/tuple config by taking the first residual spec
-        if isinstance(residual_cfg, (list, tuple)):
-            if not residual_cfg:
-                return base_model
-            residual_cfg = residual_cfg[0]
-
-        if not isinstance(residual_cfg, dict):
-            raise ValueError(
-                "residual_cfg must be a dict or list/tuple of dicts "
-                f"(got {type(residual_cfg).__name__})"
-            )
-
-        residual_kind = residual_cfg["kind"]
-        residual_cls = ResidualStrategy.registry[residual_kind]
-        residual = residual_cls(seed=seed, **residual_cfg.get("params", {}))
-
-        return ResidualStackedModel(
-            base=base_model,
-            residual=residual
-        )
+        return ResidualStackedModel(base, residuals)
