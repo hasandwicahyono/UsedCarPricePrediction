@@ -26,6 +26,7 @@ class FeatureSchema:
         """
         Auto-detect schema from raw dataframe.
         """
+        mapping = None
         if normalize:
             df, mapping = sanitize_columns(df)
 

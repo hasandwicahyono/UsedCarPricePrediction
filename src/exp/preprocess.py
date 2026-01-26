@@ -73,13 +73,11 @@ class PreprocessorBuilder:
                 ))
             )
 
-        
-        pre = []
         if cat_encoding == "raw":
             num_pipe = Pipeline([("identity", make_identity_transformer()),])
             cat_pipe = Pipeline([("identity", make_identity_transformer()),])
 
-            pre = ColumnTransformer(transformers=[
+            return ColumnTransformer(transformers=[
                                          ("num", num_pipe, self.schema.num_cols),
                                          ("cat", cat_pipe, self.schema.cat_cols),],
                                      remainder="drop",
@@ -100,12 +98,11 @@ class PreprocessorBuilder:
         else:
             raise ValueError(f"Unknown cat_encoding: {cat_encoding}")
 
-        pre = ColumnTransformer(
+        return ColumnTransformer(
             transformers=[
                 ("num", num_pipe, self.schema.num_cols),
                 ("cat", cat_pipe, self.schema.cat_cols),
             ],
             remainder="drop"
         )
-        return pre
     

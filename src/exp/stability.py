@@ -17,7 +17,7 @@ def feature_selection_stability(records: list) -> pd.DataFrame:
     for r in records:
         fold = r["outer_fold"]
         fn = r["feature_names"]
-        mask = r["num_selected_mask"]
+        mask = r["selection_mask"]
 
         if mask is None:
             # no selection => treat as "all"

@@ -2,7 +2,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import numpy as np
-import pandas as pd
 
 # =======================
 # Base ML imports
@@ -19,7 +18,6 @@ from sklearn.svm import SVR
 
 from xgboost import XGBRegressor
 from xgboost.callback import EarlyStopping
-from catboost import CatBoostRegressor
 
 # =======================
 # Deep learning
@@ -39,6 +37,7 @@ class ModelStrategy(ABC):
     registry: Dict[str, type] = {}
     model_type: str
     preprocess_policy: dict = {}
+    explain_policy: str = "tree"
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -75,6 +74,7 @@ class ResidualStrategy(ABC):
 class LinearRegressionStrategy(ModelStrategy):
     model_type = "LinearRegression"
     preprocess_policy = dict(cat_encoding="target", use_feature_selection=True)
+    explain_policy = "linear"
 
     def __init__(self, seed, params):
         self.model = LinearRegression(**params)
@@ -89,6 +89,8 @@ class LinearRegressionStrategy(ModelStrategy):
 class RandomForestStrategy(ModelStrategy):
     model_type = "RandomForest"
     preprocess_policy = dict(cat_encoding="onehot", use_feature_selection=False)
+    explain_policy = "tree"
+
 
     def __init__(self, seed, params):
         self.model = RandomForestRegressor(random_state=seed, **params)
@@ -103,6 +105,8 @@ class RandomForestStrategy(ModelStrategy):
 class DecisionTreeStrategy(ModelStrategy):
     model_type = "DecisionTree"
     preprocess_policy = dict(cat_encoding="onehot", use_feature_selection=False)
+    explain_policy = "tree"
+
 
     def __init__(self, seed: int, params: Dict[str, Any]):
         self.model = DecisionTreeRegressor(random_state=seed, **params)
@@ -117,6 +121,7 @@ class DecisionTreeStrategy(ModelStrategy):
 class SVRStrategy(ModelStrategy):
     model_type = "SVR"
     preprocess_policy = dict(cat_encoding="target", use_feature_selection=True)
+    explain_policy = "kernel"
 
     def __init__(self, seed: int, params: Dict[str, Any]):
         self.model = SVR(**params)
@@ -135,6 +140,7 @@ class SVRStrategy(ModelStrategy):
 class KerasMLPStrategy(ModelStrategy):
     model_type = "NeuralNetwork"
     preprocess_policy = dict(cat_encoding="target", use_feature_selection=True)
+    explain_policy = "kernel"
 
     def __init__(self, seed: int, params: dict):
         tf.keras.backend.clear_session()
@@ -184,6 +190,7 @@ class KerasMLPStrategy(ModelStrategy):
 class XGBoostStrategy(ModelStrategy):
     model_type = "XGBoost"
     preprocess_policy = dict(cat_encoding="onehot", use_feature_selection=False)
+    explain_policy = "tree"
 
     def __init__(self, seed, params):
         self.early_stopping_rounds = params.pop("early_stopping_rounds", None)
@@ -368,7 +375,11 @@ class ModelFactory:
         if name not in ModelStrategy.registry:
             raise ValueError(f"Unknown model name: {name}")
 
-        base = ModelStrategy.registry[name](seed, params)
+        base_params = {
+            k: v for k, v in params.items()
+            if k not in ModelFactory.NON_MODEL_KEYS
+        }
+        base = ModelStrategy.registry[name](seed, base_params)
 
         if not residual_cfgs:
             return base

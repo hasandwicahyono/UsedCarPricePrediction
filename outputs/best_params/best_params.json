@@ -9,7 +9,8 @@
     {
       "outer_fold": 1,
       "model": "LinearRegression",
-      "params": {}
+      "params": {},
+      "residual_cfg": null
     },
     {
       "outer_fold": 1,
@@ -17,12 +18,14 @@
       "params": {
         "max_depth": null,
         "min_samples_split": 15
-      }
+      },
+      "residual_cfg": null
     },
     {
       "outer_fold": 2,
       "model": "LinearRegression",
-      "params": {}
+      "params": {},
+      "residual_cfg": null
     },
     {
       "outer_fold": 2,
@@ -30,12 +33,14 @@
       "params": {
         "max_depth": null,
         "min_samples_split": 26
-      }
+      },
+      "residual_cfg": null
     },
     {
       "outer_fold": 3,
       "model": "LinearRegression",
-      "params": {}
+      "params": {},
+      "residual_cfg": null
     },
     {
       "outer_fold": 3,
@@ -43,12 +48,14 @@
       "params": {
         "max_depth": null,
         "min_samples_split": 23
-      }
+      },
+      "residual_cfg": null
     },
     {
       "outer_fold": 4,
       "model": "LinearRegression",
-      "params": {}
+      "params": {},
+      "residual_cfg": null
     },
     {
       "outer_fold": 4,
@@ -56,12 +63,14 @@
       "params": {
         "max_depth": null,
         "min_samples_split": 17
-      }
+      },
+      "residual_cfg": null
     },
     {
       "outer_fold": 5,
       "model": "LinearRegression",
-      "params": {}
+      "params": {},
+      "residual_cfg": null
     },
     {
       "outer_fold": 5,
@@ -69,7 +78,8 @@
       "params": {
         "max_depth": null,
         "min_samples_split": 33
-      }
+      },
+      "residual_cfg": null
     }
   ]
 }

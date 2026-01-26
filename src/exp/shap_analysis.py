@@ -1,8 +1,10 @@
 import numpy as np
 import pandas as pd
-import shap
 import matplotlib.pyplot as plt
+import shap
 from collections import defaultdict
+from .schema_utils import clean_feature_name
+from .shap_explainers import ShapExplainerFactory
 
 class ShapAnalyzer:
     """
@@ -38,64 +40,65 @@ class ShapAnalyzer:
     def available_models(self):
         return list(self.grouped.keys())
 
-    def _explainer(self, model_type: str, model, X_bg):
-        if model_type in ["DecisionTree", "RandomForest", "XGBoost"]:
-            return shap.TreeExplainer(model)
-        if model_type == "LinearRegression":
-            return shap.LinearExplainer(model, X_bg)
-        if model_type in ["SVR", "NeuralNetwork"]:
-            return shap.KernelExplainer(model.predict, X_bg)
-        raise ValueError(f"Unsupported model_type for SHAP: {model_type}")
-
     def compute(self, model_name: str):
         if model_name not in self.grouped:
             raise ValueError(f"No SHAP data for {model_name}")
-
-        X_all, shap_all = [], []
-        feature_names = self.grouped[model_name][0]["feature_names"]
-
-        # Align features across folds (one-hot can differ by fold).
-        all_feature_lists = [d.get("feature_names", feature_names) for d in self.grouped[model_name]]
-        common = set(all_feature_lists[0])
-        for fn in all_feature_lists[1:]:
-            common &= set(fn)
+        entries = self.grouped[model_name]
+        feature_lists = [list(e["feature_names"]) for e in entries]
+        common = set(feature_lists[0])
+        for fns in feature_lists[1:]:
+            common &= set(fns)
         if not common:
-            raise ValueError(f"No common features found across folds for {model_name}")
-        common_ordered = [f for f in all_feature_lists[0] if f in common]
+            raise ValueError(f"No common features across folds for {model_name}")
+        common_ordered = [f for f in feature_lists[0] if f in common]
 
-        for item in self.grouped[model_name]:
+        X_all, sv_all = [], []
+        kernel_policies = {"kernel"}
+
+        for item in entries:
             X = item["X_test"]
             model = item["model"]
-            model_type = item["model_type"]
-            fn_item = item.get("feature_names", feature_names)
-            if isinstance(fn_item, np.ndarray):
-                fn_item = fn_item.tolist()
-            index_map = [fn_item.index(f) for f in common_ordered]
+
+            policy = item.get("explain_policy")
+            # guard for legacy entries that stored a class instead of a string
+            if hasattr(policy, "__name__"):
+                policy = policy.policy if hasattr(policy, "policy") else policy.__name__.lower()
+            if policy is None:
+                raise KeyError(f"Missing explain_policy for {model_name}")
 
             # background
             bg_n = min(self.background_size, X.shape[0])
-            bg_idx = self.rng.choice(X.shape[0], size=bg_n, replace=False)
+            bg_idx = self.rng.choice(X.shape[0], bg_n, replace=False)
             X_bg = X[bg_idx]
 
-            # eval subsample for kernel explainers
+            explainer = ShapExplainerFactory.create(policy, model, X_bg)
+
             X_eval = X
-            if model_type in ["SVR", "NeuralNetwork"] and X.shape[0] > self.max_eval_samples:
-                idx = self.rng.choice(X.shape[0], size=self.max_eval_samples, replace=False)
+            if policy in kernel_policies and X.shape[0] > self.max_eval_samples:
+                idx = self.rng.choice(X.shape[0], self.max_eval_samples, replace=False)
                 X_eval = X[idx]
 
-            explainer = self._explainer(model_type, model, X_bg)
-            shap_vals = explainer.shap_values(X_eval)
+            sv = np.asarray(explainer.explain(X_eval))
 
-            X_all.append(X_eval[:, index_map])
-            shap_vals = np.asarray(shap_vals)
-            shap_all.append(shap_vals[:, index_map])
+            fn_item = list(item["feature_names"])
+            idx_map = [fn_item.index(f) for f in common_ordered]
 
-        return np.vstack(X_all), np.vstack(shap_all), common_ordered
+            X_all.append(X_eval[:, idx_map])
+            sv_all.append(sv[:, idx_map])
+
+        cleaned_names = [clean_feature_name(f) for f in common_ordered]
+        return np.vstack(X_all), np.vstack(sv_all), cleaned_names
 
     def beeswarm(self, model_name: str, max_display: int = 20, figsize=(10, 6), save: bool = True):
         X, sv, fn = self.compute(model_name)
         plt.figure(figsize=figsize)
-        shap.summary_plot(sv, X, feature_names=fn, max_display=max_display, show=False)
+        shap.summary_plot(
+            sv, 
+            X, 
+            feature_names=fn, 
+            max_display=max_display, 
+            show=False
+        )
         plt.tight_layout()
         if save and self.plot_manager is not None:
             self.plot_manager.save(f"shap_beeswarm_{model_name.lower()}")

@@ -6,15 +6,6 @@ import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 
 
-@dataclass
-class TargetEncodingConfig:
-    cols: List[str]
-    smoothing: float = 10.0   # larger => more shrinkage to global mean
-    min_samples_leaf: int = 1
-    noise_std: float = 0.0    # optional noise (set 0.0 for determinism)
-    random_state: int = 42
-
-
 class LeakageSafeTargetEncoder(BaseEstimator, TransformerMixin):
     """
     Leak-safe *by construction* when used in CV:
@@ -78,4 +69,4 @@ class LeakageSafeTargetEncoder(BaseEstimator, TransformerMixin):
         return X
 
     def get_feature_names_out(self, input_features=None):
-        return np.array([f"te__{c}" for c in self.cols], dtype=object)
+        return np.array([f"{col}__te" for col in self.cols], dtype=object)

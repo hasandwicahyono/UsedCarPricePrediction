@@ -388,16 +388,17 @@ class NestedCVRunner:
 
             fold_seed = self.cfg.seed + ofold
 
+            pre_cache = {}
             for model_name, residual_cfg in self.expanded_models:
-                pre_cache = {}
                 residual_tag = residual_cfg["kind"] if residual_cfg is not None else "base"
                 study_name_custom = f"{model_name}_OuterFold_{ofold}_residual_cfg_{residual_tag}"
                 study = self._create_study(seed=self.cfg.optuna_seed + ofold, 
                                            study_name=study_name_custom)
 
-                coverage_params = extract_coverage_params_from_json(self.space, 
-                                                                    model_label(model_name, 
-                                                                                residual_cfg))
+                coverage_params = extract_coverage_params_from_json(
+                    self.space, 
+                    model_name
+                )
 
                 coverage_tracker = CoverageTracker(coverage_params)
                 stopping_policy = CoverageAwareEarlyStoppingPolicy(
@@ -433,12 +434,17 @@ class NestedCVRunner:
                 
                 best_params = {**fixed, **study.best_params}
 
+                best_residual_cfg = study.best_trial.user_attrs.get("residual_cfg")
+
                 self.best_params_records_.append(
-                    {"outer_fold": ofold, "model": model_name, "params": best_params}
+                    {
+                        "outer_fold": ofold,
+                        "model": model_name,
+                        "params": best_params,
+                        "residual_cfg": best_residual_cfg,
+                    }
                 )
                 self.best_params_.setdefault(model_name, []).append(best_params)
-
-                best_residual_cfg = study.best_trial.user_attrs.get("residual_cfg")
 
                 ## --- retrain on full outer train ---
                 policy = getattr(ModelFactory.MAP[model_name], "preprocess_policy", default_policy)
@@ -474,8 +480,8 @@ class NestedCVRunner:
                 if num_pipe is not None:
                     num_feature_names = num_pipe.get_feature_names_out()
 
-                    if "enet_fs" in num_pipe.named_steps:
-                        selector = num_pipe.named_steps["enet_fs"]
+                    if "lasso" in num_pipe.named_steps:
+                        selector = num_pipe.named_steps["lasso"]
                         mask = selector.get_support()
                         est = selector.estimator_
                         if hasattr(est, "coef_"):
@@ -514,14 +520,15 @@ class NestedCVRunner:
 
                 shap_model = model
                 shap_model_type = label
-                if hasattr(model, "base_model"):
-                    shap_model = model.base_model
-                    shap_model_type = model.base_model.model_type
+                if hasattr(model, "base"):
+                    shap_model = model.base
+                    shap_model_type = model.base.model_type
 
                 self.shap_store_.append(
                     dict(
                         model_name=model_name,
-                        model_type=shap_model_type,
+                        model_type=shap_model.model_type,
+                        explain_policy=getattr(shap_model, "explain_policy", None),
                         model=getattr(shap_model, "model", shap_model),
                         X_test=Xte,
                         feature_names=pre.get_feature_names_out(),
