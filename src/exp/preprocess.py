@@ -1,4 +1,8 @@
 import numpy as np
+import warnings
+from datetime import datetime, timezone
+from pathlib import Path
+import csv
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, PowerTransformer, StandardScaler, FunctionTransformer
@@ -39,6 +43,130 @@ def make_identity_transformer():
         return IdentityTransformer()
 
 
+class SafePowerTransformer(BaseEstimator, TransformerMixin):
+    def __init__(
+        self,
+        method: str = "yeo-johnson",
+        standardize: bool = True,
+        copy: bool = True,
+        run_id: str | None = None,
+        outer_fold: int | None = None,
+        inner_fold: int | None = None,
+        model_name: str | None = None,
+        trial_id: int | None = None,
+    ):
+        self.method = method
+        self.standardize = standardize
+        self.copy = copy
+        self.run_id = run_id
+        self.outer_fold = outer_fold
+        self.inner_fold = inner_fold
+        self.model_name = model_name
+        self.trial_id = trial_id
+
+    def _get_feature_names(self, X):
+        if hasattr(X, "columns"):
+            return list(X.columns)
+        n_features = X.shape[1]
+        return [f"feature_{i}" for i in range(n_features)]
+
+    def _get_column(self, X, idx):
+        if hasattr(X, "iloc"):
+            return X.iloc[:, idx].to_numpy()
+        return np.asarray(X)[:, idx]
+
+    def fit(self, X, y=None):
+        feature_names = self._get_feature_names(X)
+        good_idx = []
+        bad = []
+        for i, name in enumerate(feature_names):
+            col = self._get_column(X, i)
+            try:
+                PowerTransformer(
+                    method=self.method,
+                    standardize=self.standardize,
+                    copy=self.copy,
+                ).fit(col.reshape(-1, 1), y)
+                good_idx.append(i)
+            except Exception as e:
+                bad.append((i, name, type(e).__name__))
+
+        if bad:
+            bad_names = [name for _, name, _ in bad]
+            warnings.warn(
+                f"PowerTransformer dropped {len(bad)} numeric columns due to fit errors: {bad_names}",
+                RuntimeWarning,
+            )
+            self._persist_dropped_columns(bad)
+
+        if not good_idx:
+            bad_names = [name for _, name, _ in bad]
+            raise ValueError(
+                "PowerTransformer failed for all numeric columns. "
+                f"Dropped columns: {bad_names}"
+            )
+
+        self._good_idx = np.array(good_idx, dtype=int)
+        self._good_names = [feature_names[i] for i in self._good_idx]
+        X_good = self._select_columns(X, self._good_idx)
+        self._pt = PowerTransformer(
+            method=self.method,
+            standardize=self.standardize,
+            copy=self.copy,
+        ).fit(X_good, y)
+        return self
+
+    def _persist_dropped_columns(self, bad):
+        root_dir = Path(__file__).resolve().parents[2]
+        log_dir = root_dir / "log"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "dropped_numerical_columns.csv"
+        write_header = not log_path.exists()
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with log_path.open("a", newline="") as f:
+            writer = csv.writer(f)
+            if write_header:
+                writer.writerow(
+                    [
+                        "run_id",
+                        "timestamp_utc",
+                        "outer_fold",
+                        "inner_fold",
+                        "model_name",
+                        "trial_id",
+                        "column_name",
+                        "error_type",
+                    ]
+                )
+            for _, name, err_type in bad:
+                writer.writerow(
+                    [
+                        self.run_id,
+                        timestamp,
+                        self.outer_fold,
+                        self.inner_fold,
+                        self.model_name,
+                        self.trial_id,
+                        name,
+                        err_type,
+                    ]
+                )
+
+    def _select_columns(self, X, idx):
+        if hasattr(X, "iloc"):
+            return X.iloc[:, idx].to_numpy()
+        return np.asarray(X)[:, idx]
+
+    def transform(self, X):
+        X_good = self._select_columns(X, self._good_idx)
+        return self._pt.transform(X_good)
+
+    def get_feature_names_out(self, input_features=None):
+        if input_features is None:
+            return np.asarray(self._good_names, dtype=object)
+        return np.asarray(self._good_names, dtype=object)
+
+
 class PreprocessorBuilder:
     def __init__(self, schema: FeatureSchema):
         self.schema = schema
@@ -52,11 +180,26 @@ class PreprocessorBuilder:
         te_min_samples_leaf: int = 1,
         te_noise_std: float = 0.0,
         seed: int = 42,
+        run_id: str | None = None,
+        outer_fold: int | None = None,
+        inner_fold: int | None = None,
+        model_name: str | None = None,
+        trial_id: int | None = None,
     ) -> ColumnTransformer:
         
         # numeric pipeline (optionally with ElasticNet FS)
         num_steps = [
-            ("yeo", PowerTransformer(method="yeo-johnson")),
+            (
+                "yeo",
+                SafePowerTransformer(
+                    method="yeo-johnson",
+                    run_id=run_id,
+                    outer_fold=outer_fold,
+                    inner_fold=inner_fold,
+                    model_name=model_name,
+                    trial_id=trial_id,
+                ),
+            ),
             ("scaler", StandardScaler()),
         ]
 

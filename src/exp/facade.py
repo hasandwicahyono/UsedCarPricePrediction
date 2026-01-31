@@ -9,12 +9,11 @@ from collections import Counter
 
 from .config import FeatureSchema, ExperimentConfig
 from .tuning import NestedCVRunner
-from .models import ModelFactory
-from .evaluation import summarize_mean_std, paired_tests, significance_matrix
+from .factories import build_model, build_preprocessor
+from .evaluation import summarize_mean_std, paired_tests, significance_matrix, DefaultEvaluator
 from .shap_analysis import ShapAnalyzer
 from .data_io import DataReadConfig, read_csv_folder, coerce_dtypes, basic_clean
 from .plot_manager import PlotManager
-from .preprocess import PreprocessorBuilder
 
 
 def aggregate_hyperparams(param_dicts):
@@ -53,13 +52,21 @@ class ExperimentFacade:
         schema: FeatureSchema,
         cfg: ExperimentConfig,
         model_names: List[str],
-        hparam_json: Optional[str] = None
+        hparam_json: Optional[str] = None,
+        evaluator: Optional[DefaultEvaluator] = None,
     ):
-        self.runner = NestedCVRunner(df, schema, cfg, model_names, hparam_json=hparam_json)
+        self.runner = NestedCVRunner(
+            df, 
+            schema, 
+            cfg, 
+            model_names, 
+            hparam_json=hparam_json
+        )
         self.df = df
         self.cfg = cfg
         self.schema = schema
         self.model_names = list(model_names)
+        self.evaluator = evaluator or DefaultEvaluator()
 
     def run(self):
         self.results_ = self.runner.run()
@@ -136,12 +143,12 @@ class ExperimentFacade:
             print(f"[final fit] {model_name}")
 
             # build preprocessing
-            pre = PreprocessorBuilder(self.schema).build()
+            pre = build_preprocessor(self.schema)
             Xp = pre.fit_transform(X, y)
 
             # build model with BEST params
             params = best_params[model_name]["aggregated"]
-            model = ModelFactory.create(model_name, seed=self.cfg.seed, params=params)
+            model = build_model(model_name, seed=self.cfg.seed, params=params)
 
             model.fit(Xp, y)
 
@@ -156,13 +163,13 @@ class ExperimentFacade:
             print(f"[saved] {model_name}")
 
     def summary(self):
-        return summarize_mean_std(self.runner.results_)
+        return self.evaluator.summary(self.runner.results_)
 
     def significance(self, metric="MAE", baseline="RandomForest", models: list[str] | None = None):
         return paired_tests(self.runner.results_, metric=metric, baseline=baseline, models=models)
 
     def significance_matrix(self, metric="MAE"):
-        return significance_matrix(self.runner.results_, metric=metric)
+        return self.evaluator.significance_matrix(self.runner.results_, metric=metric)
 
     def shap(self, plot_dir: str = "outputs/figures/shap", models: list[str] | None = None):
         pm = PlotManager(base_dir=plot_dir)

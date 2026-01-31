@@ -1,9 +1,9 @@
-import os
-import random
 import json
 from typing import Dict, Any, Optional, Tuple, List
 from collections import defaultdict
+from uuid import uuid4
 
+from .models import ModelFactory
 import numpy as np
 import pandas as pd
 import optuna
@@ -11,46 +11,23 @@ from sklearn.model_selection import KFold
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error, median_absolute_error
 
 from .config import ExperimentConfig, FeatureSchema
-from .preprocess import PreprocessorBuilder
-from .models import ModelFactory
 from .metrics import MetricStrategy
-from .metrics import make_metric
+from .factories import (
+    build_metric,
+    build_model,
+    build_preprocessor,
+    get_preprocess_policy,
+    #get_model_names,
+)
 from .schema_utils import sanitize_columns, infer_schema
-import re
+from .utils import build_monotone_constraints, make_pre_cache_key, model_label, set_seed
+from .policies import DEFAULT_PREPROCESS_POLICY
+from .specs import PreprocessSpec
+from .patterns import RunContext, SplitStrategy, TuningObserver
 
 # ======================================================
 # Utilities
 # ======================================================
-
-def build_monotone_constraints(feature_names: list[str]) -> str:
-    """
-    Define monotonicity assumptions here.
-    +1  increasing
-    -1  decreasing
-     0  unconstrained
-    """
-
-    constraints = []
-
-    for f in feature_names:
-        if re.search(r"mileage|odometer|km", f, re.I):
-            constraints.append(-1)
-        elif re.search(r"year", f, re.I):
-            constraints.append(+1)
-        elif re.search(r"engine|displacement", f, re.I):
-            constraints.append(+1)
-        else:
-            constraints.append(0)
-
-    return "(" + ",".join(map(str, constraints)) + ")"
-
-
-def set_seed(seed: int):
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    random.seed(seed)
-    np.random.seed(seed)
-
-
 def suggest_from_space(trial: optuna.Trial, space: Dict[str, Any]) -> Dict[str, Any]:
     params = {}
     for name, spec in space.items():
@@ -66,12 +43,6 @@ def suggest_from_space(trial: optuna.Trial, space: Dict[str, Any]) -> Dict[str, 
         else:
             raise ValueError(f"Unsupported hyperparameter type: {t}")
     return params
-
-
-def model_label(name, residual_cfg):
-    if residual_cfg is None:
-        return name
-    return f"{name}+{residual_cfg['kind']}"
 
 
 # ======================================================
@@ -194,13 +165,48 @@ class CoverageAwareEarlyStoppingPolicy:
 
 
 class OptunaStoppingCallback:
-    def __init__(self, policy: CoverageAwareEarlyStoppingPolicy):
+    def __init__(self, policy: CoverageAwareEarlyStoppingPolicy, observer: TuningObserver, base_ctx: RunContext):
         self.policy = policy
+        self.observer = observer
+        self.base_ctx = base_ctx
 
     def __call__(self, study, trial):
         self.policy.on_trial_complete(study, trial)
+        self.observer.on_trial_end(
+            RunContext(
+                run_id=self.base_ctx.run_id,
+                outer_fold=self.base_ctx.outer_fold,
+                inner_fold=self.base_ctx.inner_fold,
+                model_name=self.base_ctx.model_name,
+                trial_id=trial.number,
+            ),
+            trial.value,
+        )
         if self.policy.should_stop():
             study.stop()
+
+
+class KFoldSplitStrategy(SplitStrategy):
+    def __init__(self, n_splits: int):
+        self.n_splits = int(n_splits)
+
+    def split(self, X: pd.DataFrame, y: Optional[np.ndarray], seed: int):
+        cv = KFold(n_splits=self.n_splits, shuffle=True, random_state=seed)
+        return cv.split(X)
+
+
+class NullTuningObserver(TuningObserver):
+    def on_outer_fold_start(self, ctx: RunContext) -> None:
+        return None
+
+    def on_outer_fold_end(self, ctx: RunContext) -> None:
+        return None
+
+    def on_trial_start(self, ctx: RunContext) -> None:
+        return None
+
+    def on_trial_end(self, ctx: RunContext, score: Optional[float]) -> None:
+        return None
 
 
 # ======================================================
@@ -215,6 +221,11 @@ class NestedCVRunner:
         cfg: ExperimentConfig,
         model_names: List[str],
         hparam_json: Optional[str] = None,
+        metric: Optional[MetricStrategy] = None,
+        preprocessor_builder: Optional[object] = None,
+        outer_splitter: Optional[SplitStrategy] = None,
+        inner_splitter: Optional[SplitStrategy] = None,
+        observer: Optional[TuningObserver] = None,
     ):
         self.df = df.copy()
         # sanitize columns
@@ -248,9 +259,28 @@ class NestedCVRunner:
         self.feature_stability_ = []
         self.expanded_models = self._expand_models()
 
-        self.metric = make_metric(self.cfg.metric_name)
+        self.metric = metric or build_metric(self.cfg.metric_name)
+        self.outer_splitter = outer_splitter or KFoldSplitStrategy(self.cfg.outer_folds)
+        self.inner_splitter = inner_splitter or KFoldSplitStrategy(self.cfg.inner_folds)
+        self.observer = observer or NullTuningObserver()
+        if preprocessor_builder is None:
+            self._preprocessor_factory = lambda spec: build_preprocessor(self.schema, spec)
+        else:
+            self._preprocessor_factory = lambda spec: preprocessor_builder.build(
+                cat_encoding=spec.cat_encoding,
+                use_feature_selection=spec.use_feature_selection,
+                te_smoothing=spec.te_smoothing,
+                te_min_samples_leaf=spec.te_min_samples_leaf,
+                te_noise_std=spec.te_noise_std,
+                seed=spec.seed,
+                run_id=spec.run_id,
+                outer_fold=spec.outer_fold,
+                inner_fold=spec.inner_fold,
+                model_name=spec.model_name,
+                trial_id=spec.trial_id,
+            )
 
-        valid_models = set(ModelFactory.MAP.keys())
+        valid_models = set(ModelFactory.MAP.keys()) #set(get_model_names())
         unknown = set(self.model_names) - valid_models
         if unknown:
             raise ValueError(f"Unknown model names: {unknown}")
@@ -293,6 +323,8 @@ class NestedCVRunner:
         y_train_log: np.ndarray,
         y_train_price: np.ndarray,
         seed: int,
+        outer_fold: int,
+        run_id: str,
         pre_cache: dict,
         stopping_policy: CoverageAwareEarlyStoppingPolicy,
     ) -> float:
@@ -300,48 +332,61 @@ class NestedCVRunner:
         fixed, search = self.space.get(model_name)
         params = {**fixed, **suggest_from_space(trial, search)}
 
-        inner_cv = KFold(
-            n_splits=self.cfg.inner_folds,
-            shuffle=True,
-            random_state=seed,
+        self.observer.on_trial_start(
+            RunContext(
+                run_id=run_id,
+                outer_fold=outer_fold,
+                model_name=model_name,
+                trial_id=trial.number,
+            )
         )
 
-        builder = PreprocessorBuilder(self.schema)
-        default_policy = dict(cat_encoding="onehot", use_feature_selection=False)
+        default_policy = DEFAULT_PREPROCESS_POLICY
         scores = []
-        for step, (tr, va) in enumerate(inner_cv.split(X_train)):
+        for step, (tr, va) in enumerate(
+            self.inner_splitter.split(X_train, y_train_log, seed),
+            start=1,
+        ):
             Xtr_raw = X_train.iloc[tr]
             Xva_raw = X_train.iloc[va]
             ytr = y_train_log[tr]
             yva = y_train_log[va]
             yva_price = y_train_price[va]
 
-            # key = hash(tr.tobytes())
-            key = (model_name, seed, tuple(tr))
+            key = make_pre_cache_key(model_name, seed, tr)
             if self.cfg.preprocessing_cache and key in pre_cache:
                 pre, Xtr, Xva = pre_cache[key]
             else:
-                policy = getattr(ModelFactory.MAP[model_name], "preprocess_policy", default_policy)
-                pre = builder.build(
-                    cat_encoding=policy["cat_encoding"],
-                    use_feature_selection=policy["use_feature_selection"],
-                    seed=seed
+                policy = get_preprocess_policy(model_name, default_policy)
+                pre = self._preprocessor_factory(
+                    PreprocessSpec(
+                        cat_encoding=policy["cat_encoding"],
+                        use_feature_selection=policy["use_feature_selection"],
+                        seed=seed,
+                        run_id=run_id,
+                        outer_fold=outer_fold,
+                        inner_fold=step,
+                        model_name=model_name,
+                        trial_id=trial.number,
+                    )
                 )
                 Xtr = pre.fit_transform(Xtr_raw, ytr)
                 Xva = pre.transform(Xva_raw)
                 if self.cfg.preprocessing_cache:
                     pre_cache[key] = (pre, Xtr, Xva)
 
-            model = ModelFactory.create(
-                model_name, 
-                seed=seed, 
+            model = build_model(
+                model_name,
+                seed=seed,
                 params=params,
-                residual_cfgs=[residual_cfg] if residual_cfg else None
+                residual_cfgs=[residual_cfg] if residual_cfg else None,
             )
             model.fit(Xtr, ytr, Xva, yva)
 
             pred_log = model.predict(Xva)
             pred_price = np.exp(pred_log) if self.cfg.log_target else pred_log
+            pred_price = np.asarray(pred_price).reshape(-1)
+            yva_price = np.asarray(yva_price).reshape(-1)
 
             # Guard against NaN/inf in predictions or targets
             if not np.isfinite(pred_price).all() or not np.isfinite(yva_price).all():
@@ -366,20 +411,21 @@ class NestedCVRunner:
 
     def run(self):
         set_seed(self.cfg.seed)
+        self.run_id = getattr(self, "run_id", None) or str(uuid4())
 
         model_names = list(self.model_names)
         if not model_names:
             raise ValueError("No models specified for experiment.")
 
-        outer_cv = KFold(
-            n_splits=self.cfg.outer_folds,
-            shuffle=True,
-            random_state=self.cfg.seed,
-        )
-
         rows = []
-        default_policy = dict(cat_encoding="onehot", use_feature_selection=False)
-        for ofold, (tr, te) in enumerate(outer_cv.split(self.X), start=1):
+        default_policy = DEFAULT_PREPROCESS_POLICY
+        for ofold, (tr, te) in enumerate(
+            self.outer_splitter.split(self.X, self.y_log, self.cfg.seed),
+            start=1,
+        ):
+            self.observer.on_outer_fold_start(
+                RunContext(run_id=self.run_id, outer_fold=ofold)
+            )
             Xtr_raw = self.X.iloc[tr]
             Xte_raw = self.X.iloc[te]
             ytr_log = self.y_log[tr]
@@ -407,7 +453,15 @@ class NestedCVRunner:
                     metric=self.metric,
                 )
 
-                callback = OptunaStoppingCallback(stopping_policy)
+                callback = OptunaStoppingCallback(
+                    stopping_policy,
+                    self.observer,
+                    RunContext(
+                        run_id=self.run_id,
+                        outer_fold=ofold,
+                        model_name=model_name,
+                    ),
+                )
 
                 study.optimize(
                     lambda t: self._inner_objective(
@@ -418,8 +472,10 @@ class NestedCVRunner:
                         ytr_log,
                         ytr_price,
                         fold_seed,
+                        ofold,
+                        self.run_id,
                         pre_cache,
-                        stopping_policy,
+                        stopping_policy
                     ),
                     n_trials=self.cfg.n_trials,
                     timeout=self.cfg.timeout_sec,
@@ -447,12 +503,18 @@ class NestedCVRunner:
                 self.best_params_.setdefault(model_name, []).append(best_params)
 
                 ## --- retrain on full outer train ---
-                policy = getattr(ModelFactory.MAP[model_name], "preprocess_policy", default_policy)
-
-                pre = PreprocessorBuilder(self.schema).build(
-                    cat_encoding=policy["cat_encoding"],
-                    use_feature_selection=policy["use_feature_selection"],
-                    seed=fold_seed
+                policy = get_preprocess_policy(model_name, default_policy)
+                pre = self._preprocessor_factory(
+                    PreprocessSpec(
+                        cat_encoding=policy["cat_encoding"],
+                        use_feature_selection=policy["use_feature_selection"],
+                        seed=fold_seed,
+                        run_id=self.run_id,
+                        outer_fold=ofold,
+                        inner_fold=None,
+                        model_name=model_name,
+                        trial_id=None,
+                    )
                 )
                 
                 Xtr = pre.fit_transform(Xtr_raw, ytr_log)
@@ -465,11 +527,11 @@ class NestedCVRunner:
                         list(feature_names)
                     )
 
-                model = ModelFactory.create(
-                    model_name, 
-                    seed=fold_seed, 
+                model = build_model(
+                    model_name,
+                    seed=fold_seed,
                     params=best_params,
-                    residual_cfgs=[best_residual_cfg] if best_residual_cfg else None
+                    residual_cfgs=[best_residual_cfg] if best_residual_cfg else None,
                 )
                 model.fit(Xtr, ytr_log, None, None)
 
@@ -534,6 +596,9 @@ class NestedCVRunner:
                         feature_names=pre.get_feature_names_out(),
                     )
                 )
+            self.observer.on_outer_fold_end(
+                RunContext(run_id=self.run_id, outer_fold=ofold)
+            )
 
         self.results_ = pd.DataFrame(rows)
         return self.results_

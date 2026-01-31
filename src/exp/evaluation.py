@@ -1,6 +1,7 @@
 import pandas as pd
 import pandas.errors as pd_errors
 from scipy.stats import ttest_rel, wilcoxon
+from .patterns import Evaluator
 
 def _ensure_pandas4warning():
     # Work around mixed pandas versions where core code expects Pandas4Warning.
@@ -115,3 +116,19 @@ def significance_matrix(df_results: pd.DataFrame, metric: str = "MAE") -> pd.Dat
     if not out:
         return pd.DataFrame(columns=["metric","model_a","model_b","paired_t_p","wilcoxon_p","n_outer_folds"])
     return pd.DataFrame(out).sort_values(["paired_t_p","wilcoxon_p"])
+
+
+class DefaultEvaluator(Evaluator):
+    def summary(self, df_results: pd.DataFrame) -> pd.DataFrame:
+        return summarize_mean_std(df_results)
+
+    def paired_tests(
+        self,
+        df_results: pd.DataFrame,
+        metric: str = "MAE",
+        baseline: str = "RandomForest",
+    ) -> pd.DataFrame:
+        return paired_tests(df_results, metric=metric, baseline=baseline)
+
+    def significance_matrix(self, df_results: pd.DataFrame, metric: str = "MAE") -> pd.DataFrame:
+        return significance_matrix(df_results, metric=metric)

@@ -1,5 +1,5 @@
 {
-  "best_model": "DecisionTree",
+  "best_model": "SVR",
   "metric": "r2",
   "metric_opt": "maximize",
   "residual_config": {

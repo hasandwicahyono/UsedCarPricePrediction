@@ -1,14 +1,19 @@
 from abc import ABC, abstractmethod
+
+# NOTE: Explainer classes below are registered and instantiated via the SHAP explainer registry/factory.
+from exp.models import ModelStrategy
+from exp.policies import DEFAULT_PREPROCESS_POLICY, EXPLAIN_POLICIES, PREPROCESS_POLICIES
 import shap
+from .registry import SHAP_EXPLAINER_REGISTRY
 
 class BaseShapExplainer(ABC):
-    registry = {}
+    registry = SHAP_EXPLAINER_REGISTRY
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         policy = getattr(cls, "policy", None)
         if policy:
-            BaseShapExplainer.registry[policy] = cls
+            BaseShapExplainer.registry.register(policy, cls)
 
     def __init__(self, model, X_background):
         self.model = model
@@ -52,18 +57,15 @@ class KernelShapExplainer(BaseShapExplainer):
         return self.explainer.shap_values(X)
 
 class ShapExplainerFactory:
-    _CACHE = {}
-
     @staticmethod
     def create(policy: str, model, X_background):
-        key = (policy, type(model))
-        if key in ShapExplainerFactory._CACHE:
-            return ShapExplainerFactory._CACHE[key]
-
         explainer_cls = BaseShapExplainer.registry.get(policy)
         if explainer_cls is None:
             raise ValueError(f"Unknown explain_policy: {policy}")
-        explainer = explainer_cls(model, X_background)
+        return explainer_cls(model, X_background)
 
-        ShapExplainerFactory._CACHE[key] = explainer
-        return explainer
+
+class ExplainerFactory:
+    @staticmethod
+    def create(policy: str, model, X_background):
+        return ShapExplainerFactory.create(policy, model, X_background)

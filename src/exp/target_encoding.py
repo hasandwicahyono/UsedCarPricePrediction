@@ -1,5 +1,4 @@
 from __future__ import annotations
-from dataclasses import dataclass
 from typing import List, Dict, Any
 import numpy as np
 import pandas as pd
@@ -59,14 +58,38 @@ class LeakageSafeTargetEncoder(BaseEstimator, TransformerMixin):
 
     def transform(self, X: pd.DataFrame):
         X = X.copy()
+        if self.noise_std > 0:
+            rng = np.random.default_rng(self.random_state)
         for col in self.cols:
             enc = X[col].map(self.mapping_[col])
             # Ensure numeric dtype before fillna to avoid categorical setitem errors.
             enc = pd.Series(enc, index=X.index, dtype="float64")
             enc = enc.fillna(self.global_mean_)
-            X[f"{col}__te"] = enc.astype(float)
+            if self.noise_std > 0:
+                enc = enc + rng.normal(0.0, self.noise_std, size=len(enc))
+            X[f"{col}__te"] = enc.astype(self.output_dtype)
             X.drop(columns=[col], inplace=True)
         return X
 
     def get_feature_names_out(self, input_features=None):
         return np.array([f"{col}__te" for col in self.cols], dtype=object)
+
+
+class TargetEncoderFactory:
+    @staticmethod
+    def create(
+        cols: List[str],
+        smoothing: float = 10.0,
+        min_samples_leaf: int = 1,
+        noise_std: float = 0.0,
+        random_state: int = 42,
+        output_dtype: str = "float64",
+    ) -> LeakageSafeTargetEncoder:
+        return LeakageSafeTargetEncoder(
+            cols=cols,
+            smoothing=smoothing,
+            min_samples_leaf=min_samples_leaf,
+            noise_std=noise_std,
+            random_state=random_state,
+            output_dtype=output_dtype,
+        )

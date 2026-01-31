@@ -1,5 +1,7 @@
 from __future__ import annotations
-from abc import ABC, abstractmethod
+
+# NOTE: Model/Residual strategy classes below are registered and instantiated via registries/factories.
+from abc import ABC
 from typing import Dict, Any, Optional
 import numpy as np
 
@@ -27,44 +29,58 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.optimizers import Adam, AdamW, RMSprop, SGD
 
-from .metrics import make_metric
+from .registry import MODEL_REGISTRY, RESIDUAL_REGISTRY
+from .policies import DEFAULT_PREPROCESS_POLICY, PREPROCESS_POLICIES, EXPLAIN_POLICIES
 
 # =====================================================
 # Base Strategy Registries
 # =====================================================
 
 class ModelStrategy(ABC):
-    registry: Dict[str, type] = {}
+    registry = MODEL_REGISTRY
     model_type: str
-    preprocess_policy: dict = {}
+    preprocess_policy: dict = DEFAULT_PREPROCESS_POLICY
     explain_policy: str = "tree"
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         if hasattr(cls, "model_type"):
-            ModelStrategy.registry[cls.model_type] = cls
+            ModelStrategy.registry.register(cls.model_type, cls)
+            # set defaults only if child didn't override
+            if not hasattr(cls, "preprocess_policy") or cls.preprocess_policy == ModelStrategy.preprocess_policy:
+                cls.preprocess_policy = PREPROCESS_POLICIES.get(cls.model_type, DEFAULT_PREPROCESS_POLICY)
+            if not hasattr(cls, "explain_policy") or cls.explain_policy == ModelStrategy.explain_policy:
+                cls.explain_policy = EXPLAIN_POLICIES.get(cls.model_type, "tree")
 
-    @abstractmethod
-    def fit(self, Xtr, ytr, Xva=None, yva=None): ...
 
-    @abstractmethod
-    def predict(self, Xte) -> np.ndarray: ...
+    def fit(self, Xtr, ytr, Xva=None, yva=None):
+        self.model.fit(Xtr, ytr)
+
+    def predict(self, X):
+        return self.model.predict(X)
+    
+    #@abstractmethod
+    #def fit(self, Xtr, ytr, Xva=None, yva=None): ...
+#
+    #@abstractmethod
+    #def predict(self, Xte) -> np.ndarray: ...
 
 
 class ResidualStrategy(ABC):
-    registry: Dict[str, type] = {}
+    registry = RESIDUAL_REGISTRY
     model_type: str
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         if hasattr(cls, "model_type"):
-            ResidualStrategy.registry[cls.model_type] = cls
+            ResidualStrategy.registry.register(cls.model_type, cls)
 
-    @abstractmethod
-    def fit(self, X, residuals, X_val=None, residuals_val=None): ...
 
-    @abstractmethod
-    def predict(self, X) -> np.ndarray: ...
+    def fit(self, X, residuals, X_val=None, residuals_val=None):
+        self.model.fit(X, residuals)
+
+    def predict(self, X):
+        return self.model.predict(X)
 
 
 # =====================================================
@@ -73,65 +89,32 @@ class ResidualStrategy(ABC):
 
 class LinearRegressionStrategy(ModelStrategy):
     model_type = "LinearRegression"
-    preprocess_policy = dict(cat_encoding="target", use_feature_selection=True)
-    explain_policy = "linear"
 
     def __init__(self, seed, params):
         self.model = LinearRegression(**params)
 
-    def fit(self, Xtr, ytr, Xva=None, yva=None):
-        self.model.fit(Xtr, ytr)
-
-    def predict(self, X):
-        return self.model.predict(X)
-
 
 class RandomForestStrategy(ModelStrategy):
     model_type = "RandomForest"
-    preprocess_policy = dict(cat_encoding="onehot", use_feature_selection=False)
-    explain_policy = "tree"
-
 
     def __init__(self, seed, params):
         self.model = RandomForestRegressor(random_state=seed, **params)
 
-    def fit(self, Xtr, ytr, Xva=None, yva=None):
-        self.model.fit(Xtr, ytr)
-
-    def predict(self, X):
-        return self.model.predict(X)
-
 
 class DecisionTreeStrategy(ModelStrategy):
     model_type = "DecisionTree"
-    preprocess_policy = dict(cat_encoding="onehot", use_feature_selection=False)
-    explain_policy = "tree"
-
 
     def __init__(self, seed: int, params: Dict[str, Any]):
         self.model = DecisionTreeRegressor(random_state=seed, **params)
 
-    def fit(self, Xtr, ytr, Xva=None, yva=None):
-        self.model.fit(Xtr, ytr)
-
-    def predict(self, X):
-        return self.model.predict(X)
-    
 
 class SVRStrategy(ModelStrategy):
     model_type = "SVR"
-    preprocess_policy = dict(cat_encoding="target", use_feature_selection=True)
-    explain_policy = "kernel"
 
     def __init__(self, seed: int, params: Dict[str, Any]):
         self.model = SVR(**params)
 
-    def fit(self, Xtr, ytr, Xva=None, yva=None):
-        self.model.fit(Xtr, ytr)
 
-    def predict(self, X):
-        return self.model.predict(X)
-    
 
 # =====================================================
 # Neural Network
@@ -139,14 +122,11 @@ class SVRStrategy(ModelStrategy):
 
 class KerasMLPStrategy(ModelStrategy):
     model_type = "NeuralNetwork"
-    preprocess_policy = dict(cat_encoding="target", use_feature_selection=True)
-    explain_policy = "kernel"
 
     def __init__(self, seed: int, params: dict):
         tf.keras.backend.clear_session()
         tf.keras.utils.set_random_seed(seed)
         self.params = params
-        self.metric = make_metric(params.get("metric_name", "MAE"))
         self.model = None
 
     def _make_optimizer(self, name, lr, momentum, weight_decay):
@@ -161,7 +141,12 @@ class KerasMLPStrategy(ModelStrategy):
         p = self.params
         model = Sequential()
         for i in range(p.get("n_layers", 2)):
-            model.add(Dense(p[f"units_layer_{i+1}"], activation=p.get("activation", "relu")))
+            units = p[f"units_layer_{i+1}"]
+            if i == 0:
+                model.add(Dense(units, activation=p.get("activation", "relu"), input_shape=(dim,)))
+            else:
+                model.add(Dense(units, activation=p.get("activation", "relu")))
+                
         model.add(Dense(1))
         model.compile(
             optimizer=self._make_optimizer(
@@ -184,13 +169,9 @@ class KerasMLPStrategy(ModelStrategy):
             verbose=0,
         )
 
-    def predict(self, X):
-        return self.model.predict(X, verbose=0).ravel()
 
 class XGBoostStrategy(ModelStrategy):
     model_type = "XGBoost"
-    preprocess_policy = dict(cat_encoding="onehot", use_feature_selection=False)
-    explain_policy = "tree"
 
     def __init__(self, seed, params):
         self.early_stopping_rounds = params.pop("early_stopping_rounds", None)
@@ -227,9 +208,6 @@ class XGBoostStrategy(ModelStrategy):
                         pass
         self.model.fit(Xtr, ytr)
 
-    def predict(self, X):
-        return self.model.predict(X)
-
 
 # =====================================================
 # Residual Models
@@ -239,13 +217,11 @@ class ElasticNetResidual(ResidualStrategy):
     model_type = "ElasticNet"
 
     def __init__(self, seed=42, **params: Any):#alpha=0.001, l1_ratio=0.5):
-        self.model = ElasticNet(alpha=params.get("alpha", 0.001), l1_ratio=params.get("l1_ratio", 0.5), random_state=seed)
-
-    def fit(self, X, residuals, X_val=None, residuals_val=None):
-        self.model.fit(X, residuals)
-
-    def predict(self, X):
-        return self.model.predict(X)
+        self.model = ElasticNet(
+            alpha=params.get("alpha", 0.001), 
+            l1_ratio=params.get("l1_ratio", 0.5), 
+            random_state=seed
+        )
 
 
 class QuantileResidual(ResidualStrategy):
@@ -256,24 +232,12 @@ class QuantileResidual(ResidualStrategy):
             quantile=params.get("quantile", 0.75), alpha=params.get("alpha", 0.001), solver="highs"
         )
 
-    def fit(self, X, residuals, X_val=None, residuals_val=None):
-        self.model.fit(X, residuals)
-
-    def predict(self, X):
-        return self.model.predict(X)
-
 
 class HuberResidual(ResidualStrategy):
     model_type = "Huber"
 
     def __init__(self, seed: int = 42, **params: Any):#epsilon=1.35, alpha=0.0001):
         self.model = HuberRegressor(epsilon=params.get("epsilon", 1.35), alpha=params.get("alpha", 0.0001))
-
-    def fit(self, X, residuals, X_val=None, residuals_val=None):
-        self.model.fit(X, residuals)
-
-    def predict(self, X):
-        return self.model.predict(X)
 
 
 class PseudoHuberXGBResidualModel(ResidualStrategy):
@@ -308,9 +272,6 @@ class PseudoHuberXGBResidualModel(ResidualStrategy):
             )
         else:
             self.model.fit(X, residuals)
-
-    def predict(self, X):
-        return self.model.predict(X)
 
 
 # =====================================================
@@ -390,3 +351,27 @@ class ModelFactory:
             residuals.append(cls(seed=seed, **cfg.get("params", {})))
 
         return ResidualStackedModel(base, residuals)
+
+
+class ModelBuilder:
+    def __init__(self, name: str, seed: int):
+        self.name = name
+        self.seed = seed
+        self.params: Dict[str, Any] = {}
+        self.residual_cfgs: Optional[list] = None
+
+    def with_params(self, params: Dict[str, Any]) -> "ModelBuilder":
+        self.params = dict(params)
+        return self
+
+    def with_residuals(self, residual_cfgs: Optional[list]) -> "ModelBuilder":
+        self.residual_cfgs = residual_cfgs
+        return self
+
+    def build(self) -> ModelStrategy:
+        return ModelFactory.create(
+            name=self.name,
+            seed=self.seed,
+            params=self.params,
+            residual_cfgs=self.residual_cfgs,
+        )

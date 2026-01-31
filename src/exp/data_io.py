@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import pandas as pd
+from .patterns import DataSource
 
 @dataclass
 class DataReadConfig:
@@ -85,6 +86,14 @@ def read_csv_folder(cfg: DataReadConfig) -> pd.DataFrame:
 
     out = pd.concat(frames, axis=0, ignore_index=True, sort=False)
     return out
+
+
+@dataclass
+class CsvFolderSource(DataSource):
+    cfg: DataReadConfig
+
+    def read(self) -> pd.DataFrame:
+        return read_csv_folder(self.cfg)
 
 
 def coerce_dtypes(

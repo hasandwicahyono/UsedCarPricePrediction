@@ -1,10 +1,12 @@
+from .shap_explainers import ShapExplainerFactory
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import shap
 from collections import defaultdict
 from .schema_utils import clean_feature_name
-from .shap_explainers import ShapExplainerFactory
+#from .factories import build_shap_explainer
+from tqdm.auto import tqdm
 
 class ShapAnalyzer:
     """
@@ -55,7 +57,9 @@ class ShapAnalyzer:
         X_all, sv_all = [], []
         kernel_policies = {"kernel"}
 
-        for item in entries:
+        for item in tqdm(entries, desc=f"Computing SHAP for {model_name}"):
+            if "X_test" not in item or "model" not in item:
+                raise KeyError(f"Missing X_test or model in SHAP store for {model_name}")   
             X = item["X_test"]
             model = item["model"]
 
@@ -71,7 +75,7 @@ class ShapAnalyzer:
             bg_idx = self.rng.choice(X.shape[0], bg_n, replace=False)
             X_bg = X[bg_idx]
 
-            explainer = ShapExplainerFactory.create(policy, model, X_bg)
+            explainer = ShapExplainerFactory.create(policy, model, X_bg) #build_shap_explainer(policy, model, X_bg)
 
             X_eval = X
             if policy in kernel_policies and X.shape[0] > self.max_eval_samples:
@@ -81,11 +85,12 @@ class ShapAnalyzer:
             sv = np.asarray(explainer.explain(X_eval))
 
             fn_item = list(item["feature_names"])
-            idx_map = [fn_item.index(f) for f in common_ordered]
+            idx_lookup = {f: i for i, f in enumerate(fn_item)}
+            idx_map = [idx_lookup[f] for f in common_ordered]
 
             X_all.append(X_eval[:, idx_map])
             sv_all.append(sv[:, idx_map])
-
+ 
         cleaned_names = [clean_feature_name(f) for f in common_ordered]
         return np.vstack(X_all), np.vstack(sv_all), cleaned_names
 
@@ -103,12 +108,3 @@ class ShapAnalyzer:
         if save and self.plot_manager is not None:
             self.plot_manager.save(f"shap_beeswarm_{model_name.lower()}")
         plt.show()
-
-    def mean_abs_table(self, model_name: str, top_k: int = 20):
-        X, sv, fn = self.compute(model_name)
-        imp = np.mean(np.abs(sv), axis=0)
-        return (
-            pd.DataFrame({"feature": fn, "mean_abs_shap": imp})
-            .sort_values("mean_abs_shap", ascending=False)
-            .head(top_k)
-        )

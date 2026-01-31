@@ -11,12 +11,6 @@ class FeatureSchema:
     mapping: Optional[dict] = None
 
     @classmethod
-    def auto(cls, df, target):
-        num_cols = df.select_dtypes(include="number").columns.drop(target).tolist()
-        cat_cols = df.select_dtypes(exclude="number").columns.tolist()
-        return cls(target=target, num_cols=num_cols, cat_cols=cat_cols)
-
-    @classmethod
     def from_dataframe(
         cls,
         df: pd.DataFrame,
@@ -52,30 +46,15 @@ class ExperimentConfig:
     early_stopping_patience: int = 5
 
     # Metric
-    metric_name: str = "r2"
-    metric_opt: str = "maximize"  # or "maximize"
+    metric_name: str = "r2"         # r2, mse, negmse, rmse, mae, medae 
+    metric_opt: str = "maximize"    # or "minimize"
 
     # Residual Stacking
     residuals: Dict[str, List[Dict[str, Any]]] = field(default_factory=lambda: {
         "XGBoost": [
             {"kind": "Huber", "params": {"epsilon": 1.5}},
-            #{
-            #    "kind": "PseudoHuber",
-            #    "params": {
-            #        "n_estimators": 200,
-            #        "max_depth": 2,
-            #        "learning_rate": 0.05,
-            #        "subsample": 0.8,
-            #        "colsample_bytree": 0.8,
-            #        "reg_alpha": 0.1,
-            #        "reg_lambda": 1.0,
-            #        "tree_method": "hist",
-            #        "n_jobs": -1,
-            #    },
-            #},
         ],
         "RandomForest": [
-            #{"kind": "Huber", "params": {"epsilon": 1.5}},
             {
                 "kind": "PseudoHuber",
                 "params": {
@@ -107,13 +86,31 @@ class ExperimentConfig:
 
     def __post_init__(self):
         # --- auto-derive optimization direction ---
+        metric = self.metric_name.lower()
+        expected = "maximize" if metric in {"r2", "r^2", "negmse"} else "minimize"
         if self.metric_opt is None:
-            metric = self.metric_name.lower()
-            # Set direction of R2 or Negative MSE into maximization. Otherwise, minimization.
-            self.metric_opt = "maximize" if metric in {"r2", "r^2", "negmse"} else "minimize"
+            self.metric_opt = expected
+        elif self.metric_opt != expected:
+            raise ValueError(
+                f"metric_opt='{self.metric_opt}' conflicts with metric_name='{self.metric_name}' "
+                f"(expected '{expected}')"
+            )
 
         # --- validate ---
         if self.metric_opt not in ("minimize", "maximize"):
             raise ValueError(
                 f"metric_opt must be 'minimize' or 'maximize', got {self.metric_opt}"
             )
+
+
+class ExperimentConfigBuilder:
+    def __init__(self):
+        self._cfg = ExperimentConfig()
+
+    def set(self, **kwargs) -> "ExperimentConfigBuilder":
+        for k, v in kwargs.items():
+            setattr(self._cfg, k, v)
+        return self
+
+    def build(self) -> ExperimentConfig:
+        return self._cfg
