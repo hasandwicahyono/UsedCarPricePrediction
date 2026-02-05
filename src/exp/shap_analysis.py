@@ -34,9 +34,15 @@ class ShapAnalyzer:
     def _group(self, models: list[str] | None = None):
         g = defaultdict(list)
         for d in self.store:
-            if models is not None and d["model_name"] not in models:
+            labels = [d["model_name"]]
+            if "model_label" in d and d["model_label"] != d["model_name"]:
+                labels.append(d["model_label"])
+
+            if models is not None and not any(m in models for m in labels):
                 continue
-            g[d["model_name"]].append(d)
+
+            for label in labels:
+                g[label].append(d)
         return g
 
     def available_models(self):

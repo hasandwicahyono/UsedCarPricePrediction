@@ -8,7 +8,7 @@ PREPROCESS_POLICIES = {
     "DecisionTree": dict(cat_encoding="onehot", use_feature_selection=False),
     "SVR": dict(cat_encoding="target", use_feature_selection=True),
     "NeuralNetwork": dict(cat_encoding="target", use_feature_selection=True),
-    "XGBoost": dict(cat_encoding="onehot", use_feature_selection=False),
+    "XGBoost": dict(cat_encoding="target", use_feature_selection=False),
 }
 
 EXPLAIN_POLICIES = {

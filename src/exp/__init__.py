@@ -12,3 +12,4 @@ from .plot_manager import PlotManager, PointRangePlot
 from .preprocess import PreprocessorBuilder
 from .factories import build_metric, build_model, build_preprocessor#, build_shap_explainer
 from .patterns import RunContext
+from .deploy import load_best_model_name, load_model_artifacts, make_predictor

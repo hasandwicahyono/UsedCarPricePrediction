@@ -249,6 +249,7 @@ class PseudoHuberXGBResidualModel(ResidualStrategy):
     model_type = "PseudoHuber"
 
     def __init__(self, seed: int = 42, **params: Any):
+        self.early_stopping_rounds = params.pop("early_stopping_rounds", None)
         self.model = XGBRegressor(
             random_state=seed,
             objective="reg:pseudohubererror",
@@ -264,6 +265,26 @@ class PseudoHuberXGBResidualModel(ResidualStrategy):
         )
 
     def fit(self, X, residuals, X_val=None, residuals_val=None):
+        if X_val is not None and self.early_stopping_rounds:
+            try:
+                self.model.fit(
+                    X, residuals,
+                    eval_set=[(X_val, residuals_val)],
+                    early_stopping_rounds=self.early_stopping_rounds,
+                    verbose=False,
+                )
+                return
+            except TypeError:
+                try:
+                    self.model.fit(
+                        X, residuals,
+                        eval_set=[(X_val, residuals_val)],
+                        callbacks=[EarlyStopping(rounds=self.early_stopping_rounds)],
+                        verbose=False,
+                    )
+                    return
+                except TypeError:
+                    pass
         if X_val is not None:
             self.model.fit(
                 X, residuals,

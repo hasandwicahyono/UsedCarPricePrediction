@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
 
 # NOTE: Explainer classes below are registered and instantiated via the SHAP explainer registry/factory.
-from exp.models import ModelStrategy
-from exp.policies import DEFAULT_PREPROCESS_POLICY, EXPLAIN_POLICIES, PREPROCESS_POLICIES
 import shap
 from .registry import SHAP_EXPLAINER_REGISTRY
 

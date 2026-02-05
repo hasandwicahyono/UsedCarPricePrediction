@@ -15,15 +15,16 @@
     "RandomForest": {
       "n_trials": 80,
       "fixed": {
-        "n_jobs": -1, 
-        "max_depth": null
+        "n_jobs": -1
       },
       "search": {
         "min_samples_split": {"type": "int", "low": 2, "high": 50, "step": 2},
         "n_estimators": {"type": "int", "low": 200, "high": 2000, "step": 10},
         "max_samples": {"type":"float", "low":0.6, "high":0.9},
         "min_samples_leaf": {"type": "int", "low": 2, "high": 10, "step": 1},
-        "max_features": {"type": "categorical", "choices": ["sqrt", 0.3, 0.5, 0.7, 0.8]}
+        "max_features": {"type": "categorical", "choices": ["sqrt", "log2", 0.3, 0.5, 0.7, 0.8]},
+        "max_depth": {"type": "int", "low": 4, "high": 40, "step": 2},
+        "bootstrap": {"type": "categorical", "choices": [true, false]}
       }
     },
     "SVR": {
@@ -99,6 +100,58 @@
     "LinearRegression": {
       "fixed": {},
       "search": {}
+    }
+  },
+  "residuals": {
+    "XGBoost": {
+      "Huber": {
+        "fixed": {},
+        "search": {
+          "epsilon": { "type": "float", "low": 1.0, "high": 2.5 },
+          "alpha": { "type": "float", "low": 1e-5, "high": 1e-1, "log": true }
+        }
+      },
+      "PseudoHuber": {
+        "fixed": {
+          "tree_method": "hist",
+          "n_jobs": -1
+        },
+        "search": {
+          "n_estimators": { "type": "int", "low": 300, "high": 1200, "step": 10 },
+          "max_depth": { "type": "int", "low": 2, "high": 4 },
+          "learning_rate": { "type": "float", "low": 0.02, "high": 0.12, "log": true },
+          "subsample": { "type": "float", "low": 0.7, "high": 1.0 },
+          "colsample_bytree": { "type": "float", "low": 0.7, "high": 1.0 },
+          "reg_alpha": { "type": "float", "low": 1e-4, "high": 1.0, "log": true },
+          "reg_lambda": { "type": "float", "low": 0.5, "high": 5.0 },
+          "early_stopping_rounds": { "type": "int", "low": 20, "high": 200 }
+        }
+      }
+    },
+    "RandomForest": {
+      "Huber": {
+        "fixed": {},
+        "search": {
+          "epsilon": { "type": "float", "low": 1.0, "high": 2.5 },
+          "alpha": { "type": "float", "low": 1e-5, "high": 1e-1, "log": true }
+        }
+      },
+      "PseudoHuber": {
+        "fixed": {
+          "tree_method": "hist",
+          "n_jobs": -1
+        },
+        "search": {
+          "n_estimators": { "type": "int", "low": 300, "high": 1200, "step": 10 },
+          "max_depth": { "type": "int", "low": 2, "high": 4 },
+          "learning_rate": { "type": "float", "low": 0.02, "high": 0.12, "log": true },
+          "subsample": { "type": "float", "low": 0.7, "high": 1.0 },
+          "colsample_bytree": { "type": "float", "low": 0.7, "high": 1.0 },
+          "reg_alpha": { "type": "float", "low": 1e-4, "high": 1.0, "log": true },
+          "reg_lambda": { "type": "float", "low": 0.5, "high": 5.0 },
+          "early_stopping_rounds": { "type": "int", "low": 20, "high": 200 }
+        }
+      }
     }
   }
 }

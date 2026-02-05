@@ -9,11 +9,14 @@ from collections import Counter
 
 from .config import FeatureSchema, ExperimentConfig
 from .tuning import NestedCVRunner
-from .factories import build_model, build_preprocessor
-from .evaluation import summarize_mean_std, paired_tests, significance_matrix, DefaultEvaluator
+from .factories import build_model, build_preprocessor, get_preprocess_policy
+from .policies import DEFAULT_PREPROCESS_POLICY
+from .specs import PreprocessSpec
+from .evaluation import paired_tests, significance_matrix, DefaultEvaluator
 from .shap_analysis import ShapAnalyzer
 from .data_io import DataReadConfig, read_csv_folder, coerce_dtypes, basic_clean
 from .plot_manager import PlotManager
+from .utils import model_label
 
 
 def aggregate_hyperparams(param_dicts):
@@ -22,11 +25,16 @@ def aggregate_hyperparams(param_dicts):
     - numeric → median
     - categorical → mode
     """
+    if not param_dicts:
+        return {}
+
     aggregated = {}
-    keys = param_dicts[0].keys()
+    keys = sorted({k for d in param_dicts for k in d.keys()})
 
     for k in keys:
-        values = [p[k] for p in param_dicts]
+        values = [p[k] for p in param_dicts if k in p]
+        if not values:
+            continue
         # make list-like hashable for mode calculation
         if any(isinstance(v, list) for v in values):
             values = [tuple(v) if isinstance(v, list) else v for v in values]
@@ -43,6 +51,31 @@ def aggregate_hyperparams(param_dicts):
             aggregated[k] = mode_val
 
     return aggregated
+
+
+def aggregate_residual_cfg(residual_cfgs):
+    """
+    Aggregate residual configs across folds by mode on the full config dict.
+    """
+    if not residual_cfgs:
+        return None
+    serialized = [
+        json.dumps(cfg, sort_keys=True) if cfg is not None else None
+        for cfg in residual_cfgs
+    ]
+    mode_val = Counter(serialized).most_common(1)[0][0]
+    if mode_val is None:
+        return None
+    return json.loads(mode_val)
+
+
+class EnsembleModel:
+    def __init__(self, models: list):
+        self.models = models
+
+    def predict(self, X):
+        preds = [m.predict(X) for m in self.models]
+        return np.mean(np.vstack(preds), axis=0)
 
 
 class ExperimentFacade:
@@ -114,6 +147,10 @@ class ExperimentFacade:
             with open(out_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
 
+        residuals_per_model = {}
+        for rec in self.runner.best_params_records_:
+            residuals_per_model.setdefault(rec["model"], []).append(rec.get("residual_cfg"))
+
         for model_name, params_per_fold in self.runner.best_params_.items():
             payload[model_name] = {
                 "aggregated": aggregate_hyperparams(params_per_fold),
@@ -121,6 +158,8 @@ class ExperimentFacade:
                 "n_outer_folds": len(params_per_fold),
                 "metric_optimized": self.cfg.metric_opt,
                 "seed": self.cfg.seed,
+                "residual_cfg": aggregate_residual_cfg(residuals_per_model.get(model_name, [])),
+                "residual_cfg_per_outer_fold": residuals_per_model.get(model_name, []),
             }
 
         with open(out_path, "w", encoding="utf-8") as f:
@@ -128,7 +167,7 @@ class ExperimentFacade:
 
         print(f"[saved] {out_path.resolve()}")
 
-    def _refit_and_save_models(self, out_dir="outputs/models", hyperparams_dir="outputs/hyperparameters"):
+    def _refit_and_save_models(self, out_dir="outputs/models", hyperparams_dir="outputs/hyperparameters", top_k: int = 3):
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -139,16 +178,33 @@ class ExperimentFacade:
         X = self.df[self.schema.num_cols + self.schema.cat_cols]
         y = self.df[self.schema.target]
 
+        metric_col = self.cfg.metric_name.upper()
+        metric_opt = self.cfg.metric_opt
+
         for model_name in self.model_names:
             print(f"[final fit] {model_name}")
 
             # build preprocessing
-            pre = build_preprocessor(self.schema)
+            policy = get_preprocess_policy(model_name, DEFAULT_PREPROCESS_POLICY)
+            pre = build_preprocessor(
+                self.schema,
+                PreprocessSpec(
+                    cat_encoding=policy["cat_encoding"],
+                    use_feature_selection=policy["use_feature_selection"],
+                    seed=self.cfg.seed,
+                ),
+            )
             Xp = pre.fit_transform(X, y)
 
             # build model with BEST params
             params = best_params[model_name]["aggregated"]
-            model = build_model(model_name, seed=self.cfg.seed, params=params)
+            residual_cfg = best_params[model_name].get("residual_cfg")
+            model = build_model(
+                model_name,
+                seed=self.cfg.seed,
+                params=params,
+                residual_cfgs=[residual_cfg] if residual_cfg else None,
+            )
 
             model.fit(Xp, y)
 
@@ -156,11 +212,82 @@ class ExperimentFacade:
             if model_name == "NeuralNetwork":
                 model.model.save(out_dir / f"{model_name}.keras")
             else:   
-                joblib.dump(model, out_dir / f"{model_name}.joblib")
+                label = model_name
+                if residual_cfg is not None and isinstance(residual_cfg, dict):
+                    kind = residual_cfg.get("kind")
+                    if kind:
+                        label = f"{model_name}+{kind}"
+                joblib.dump(model, out_dir / f"{label}.joblib")
             
             joblib.dump(pre, out_dir / f"{model_name}_preprocessor.joblib")
 
             print(f"[saved] {model_name}")
+
+            # also save all residual variants (if configured)
+            residual_cfgs = self.cfg.residuals.get(model_name, []) if isinstance(self.cfg.residuals, dict) else []
+            seen = set()
+            for rc in residual_cfgs:
+                if not rc or rc.get("kind") in (None, "None"):
+                    continue
+                key = json.dumps(rc, sort_keys=True)
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                r_model = build_model(
+                    model_name,
+                    seed=self.cfg.seed,
+                    params=params,
+                    residual_cfgs=[rc],
+                )
+                r_model.fit(Xp, y)
+                label = f"{model_name}+{rc.get('kind')}"
+                joblib.dump(r_model, out_dir / f"{label}.joblib")
+                print(f"[saved] {label}")
+
+            # optional top-k ensemble using per-fold best params
+            if top_k and model_name in best_params:
+                records = [
+                    r for r in self.runner.best_params_records_
+                    if r.get("model") == model_name
+                ]
+                if records:
+                    scored = []
+                    for r in records:
+                        label = model_label(model_name, r.get("residual_cfg"))
+                        ofold = r.get("outer_fold")
+                        score = None
+                        if self.results_ is not None:
+                            rows = self.results_[
+                                (self.results_["model"] == label)
+                                & (self.results_["outer_fold"] == ofold)
+                            ]
+                            if not rows.empty and metric_col in rows.columns:
+                                score = float(rows.iloc[0][metric_col])
+                        scored.append((score, r))
+
+                    # sort by score, fallback to original order if score is None
+                    if metric_opt == "minimize":
+                        scored.sort(key=lambda x: (x[0] is None, x[0]))
+                    else:
+                        scored.sort(key=lambda x: (x[0] is None, -(x[0] if x[0] is not None else 0)))
+
+                    top = [r for _, r in scored[: max(1, int(top_k))]]
+                    models = []
+                    for r in top:
+                        m = build_model(
+                            model_name,
+                            seed=self.cfg.seed,
+                            params=r.get("params", {}),
+                            residual_cfgs=[r.get("residual_cfg")] if r.get("residual_cfg") else None,
+                        )
+                        m.fit(Xp, y)
+                        models.append(m)
+
+                    if models:
+                        ensemble = EnsembleModel(models)
+                        joblib.dump(ensemble, out_dir / f"{model_name}_ensemble_top{len(models)}.joblib")
+                        print(f"[saved] {model_name} ensemble top{len(models)}")
 
     def summary(self):
         return self.evaluator.summary(self.runner.results_)

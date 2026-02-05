@@ -28,21 +28,53 @@ from .patterns import RunContext, SplitStrategy, TuningObserver
 # ======================================================
 # Utilities
 # ======================================================
-def suggest_from_space(trial: optuna.Trial, space: Dict[str, Any]) -> Dict[str, Any]:
+def suggest_from_space(
+    trial: optuna.Trial,
+    space: Dict[str, Any],
+    name_prefix: str = "",
+) -> Dict[str, Any]:
     params = {}
     for name, spec in space.items():
+        pname = f"{name_prefix}{name}"
         t = spec["type"]
         if t == "int":
-            params[name] = trial.suggest_int(name, spec["low"], spec["high"])
+            params[name] = trial.suggest_int(pname, spec["low"], spec["high"])
         elif t == "float":
             params[name] = trial.suggest_float(
-                name, spec["low"], spec["high"], log=bool(spec.get("log", False))
+                pname, spec["low"], spec["high"], log=bool(spec.get("log", False))
             )
         elif t == "categorical":
-            params[name] = trial.suggest_categorical(name, spec["choices"])
+            params[name] = trial.suggest_categorical(pname, spec["choices"])
         else:
             raise ValueError(f"Unsupported hyperparameter type: {t}")
     return params
+
+
+def ensure_numeric_matrix(Xtr, Xva=None):
+    """
+    Ensure X matrices are numeric for models like XGBoost.
+    If object dtypes are found, fall back to pandas.get_dummies and align columns.
+    """
+    if hasattr(Xtr, "dtype") and Xtr.dtype != object:
+        return Xtr, Xva
+    if isinstance(Xtr, pd.DataFrame):
+        Xtr_d = pd.get_dummies(Xtr, drop_first=False)
+        if Xva is not None:
+            Xva_d = pd.get_dummies(Xva, drop_first=False)
+            Xva_d = Xva_d.reindex(columns=Xtr_d.columns, fill_value=0)
+        else:
+            Xva_d = None
+        return Xtr_d.to_numpy(), None if Xva_d is None else Xva_d.to_numpy()
+    # fallback: try to coerce numpy object array into DataFrame then dummies
+    Xtr_df = pd.DataFrame(Xtr)
+    Xtr_d = pd.get_dummies(Xtr_df, drop_first=False)
+    if Xva is not None:
+        Xva_df = pd.DataFrame(Xva)
+        Xva_d = pd.get_dummies(Xva_df, drop_first=False)
+        Xva_d = Xva_d.reindex(columns=Xtr_d.columns, fill_value=0)
+    else:
+        Xva_d = None
+    return Xtr_d.to_numpy(), None if Xva_d is None else Xva_d.to_numpy()
 
 
 # ======================================================
@@ -61,6 +93,12 @@ class HyperparamSpace:
             return {}, {}
         m = self.cfg["models"].get(model_name, {})
         return dict(m.get("fixed", {})), dict(m.get("search", {}))
+
+    def get_residual(self, model_name: str, residual_kind: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        if self.cfg is None:
+            return {}, {}
+        r = self.cfg.get("residuals", {}).get(model_name, {}).get(residual_kind, {})
+        return dict(r.get("fixed", {})), dict(r.get("search", {}))
 
     def global_trials(self) -> Optional[int]:
         return self.cfg.get("global", {}).get("n_trials") if self.cfg else None
@@ -293,7 +331,11 @@ class NestedCVRunner:
                 expanded.append((m, None))
             else:
                 for r in residuals:
-                    expanded.append((m, r))
+                    kind = None if r is None else r.get("kind")
+                    if kind is None or (isinstance(kind, str) and kind.strip().lower() == "none"):
+                        expanded.append((m, None))
+                    else:
+                        expanded.append((m, r))
         return expanded
 
     def _prepare_xy(self):
@@ -331,6 +373,8 @@ class NestedCVRunner:
 
         fixed, search = self.space.get(model_name)
         params = {**fixed, **suggest_from_space(trial, search)}
+        if model_name == "RandomForest" and params.get("bootstrap") is False:
+            params["max_samples"] = None
 
         self.observer.on_trial_start(
             RunContext(
@@ -375,12 +419,29 @@ class NestedCVRunner:
                 if self.cfg.preprocessing_cache:
                     pre_cache[key] = (pre, Xtr, Xva)
 
+            residual_cfg_use = residual_cfg
+            if residual_cfg is not None:
+                residual_cfg_use = dict(residual_cfg)
+                residual_params = dict(residual_cfg.get("params", {}))
+                fixed_r, search_r = self.space.get_residual(model_name, residual_cfg["kind"])
+                residual_params.update(fixed_r)
+                residual_params.update(
+                    suggest_from_space(
+                        trial,
+                        search_r,
+                        name_prefix=f"residual__{residual_cfg['kind']}__",
+                    )
+                )
+                residual_cfg_use["params"] = residual_params
+
             model = build_model(
                 model_name,
                 seed=seed,
                 params=params,
-                residual_cfgs=[residual_cfg] if residual_cfg else None,
+                residual_cfgs=[residual_cfg_use] if residual_cfg_use else None,
             )
+            if model_name == "XGBoost":
+                Xtr, Xva = ensure_numeric_matrix(Xtr, Xva)
             model.fit(Xtr, ytr, Xva, yva)
 
             pred_log = model.predict(Xva)
@@ -406,7 +467,7 @@ class NestedCVRunner:
                     stopping_policy.on_trial_pruned()
                     raise optuna.TrialPruned()
     
-        trial.set_user_attr("residual_cfg", residual_cfg)
+        trial.set_user_attr("residual_cfg", residual_cfg_use if residual_cfg_use else None)
         return float(np.mean(scores)) #float(np.mean(maes))
 
     def run(self):
@@ -581,14 +642,13 @@ class NestedCVRunner:
                 )
 
                 shap_model = model
-                shap_model_type = label
                 if hasattr(model, "base"):
                     shap_model = model.base
-                    shap_model_type = model.base.model_type
 
                 self.shap_store_.append(
                     dict(
                         model_name=model_name,
+                        model_label=label,
                         model_type=shap_model.model_type,
                         explain_policy=getattr(shap_model, "explain_policy", None),
                         model=getattr(shap_model, "model", shap_model),

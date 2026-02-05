@@ -51,10 +51,48 @@ class ExperimentConfig:
 
     # Residual Stacking
     residuals: Dict[str, List[Dict[str, Any]]] = field(default_factory=lambda: {
+        "DecisionTree": [
+            {"kind": "None", "params": {}},
+            {"kind": "ElasticNet", "params": {"alpha": 0.001, "l1_ratio": 0.5}},
+            {"kind": "Quantile", "params": {"quantile": 0.75, "alpha": 0.001}},
+            {"kind": "Huber", "params": {"epsilon": 1.35}},
+            {
+                "kind": "PseudoHuber",
+                "params": {
+                    "n_estimators": 200,
+                    "max_depth": 2,
+                    "learning_rate": 0.05,
+                    "subsample": 0.8,
+                    "colsample_bytree": 0.8,
+                    "reg_alpha": 0.1,
+                    "reg_lambda": 1.0,
+                    "tree_method": "hist",
+                    "n_jobs": -1,
+                },
+            },
+        ],
         "XGBoost": [
-            {"kind": "Huber", "params": {"epsilon": 1.5}},
+            {"kind": "Huber", "params": {"epsilon": 1.35}},
+            {
+                "kind": "PseudoHuber",
+                "params": {
+                    "n_estimators": 200,
+                    "max_depth": 2,
+                    "learning_rate": 0.05,
+                    "subsample": 0.8,
+                    "colsample_bytree": 0.8,
+                    "reg_alpha": 0.1,
+                    "reg_lambda": 1.0,
+                    "tree_method": "hist",
+                    "n_jobs": -1,
+                },
+            },
         ],
         "RandomForest": [
+            {"kind": "None", "params": {}},
+            {"kind": "ElasticNet", "params": {"alpha": 0.001, "l1_ratio": 0.5}},
+            {"kind": "Quantile", "params": {"quantile": 0.75, "alpha": 0.001}},
+            {"kind": "Huber", "params": {"epsilon": 1.35}},
             {
                 "kind": "PseudoHuber",
                 "params": {
