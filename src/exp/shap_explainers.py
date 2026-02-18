@@ -54,6 +54,32 @@ class KernelShapExplainer(BaseShapExplainer):
     def explain(self, X):
         return self.explainer.shap_values(X)
 
+class DeepShapExplainer(BaseShapExplainer):
+    policy = "deep"
+
+    def __init__(self, model, X_background):
+        super().__init__(model, X_background)
+        self.explainer = shap.DeepExplainer(model, X_background)
+
+    def explain(self, X):
+        values = self.explainer.shap_values(X, check_additivity=False)
+        if isinstance(values, list) and len(values) == 1:
+            return values[0]
+        return values
+
+class GradientShapExplainer(BaseShapExplainer):
+    policy = "gradient"
+
+    def __init__(self, model, X_background):
+        super().__init__(model, X_background)
+        self.explainer = shap.GradientExplainer(model, X_background)
+
+    def explain(self, X):
+        values = self.explainer.shap_values(X)
+        if isinstance(values, list) and len(values) == 1:
+            return values[0]
+        return values
+
 class ShapExplainerFactory:
     @staticmethod
     def create(policy: str, model, X_background):
@@ -61,9 +87,3 @@ class ShapExplainerFactory:
         if explainer_cls is None:
             raise ValueError(f"Unknown explain_policy: {policy}")
         return explainer_cls(model, X_background)
-
-
-class ExplainerFactory:
-    @staticmethod
-    def create(policy: str, model, X_background):
-        return ShapExplainerFactory.create(policy, model, X_background)

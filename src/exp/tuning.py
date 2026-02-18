@@ -55,9 +55,17 @@ def ensure_numeric_matrix(Xtr, Xva=None):
     Ensure X matrices are numeric for models like XGBoost.
     If object dtypes are found, fall back to pandas.get_dummies and align columns.
     """
-    if hasattr(Xtr, "dtype") and Xtr.dtype != object:
-        return Xtr, Xva
     if isinstance(Xtr, pd.DataFrame):
+        # Fast path: avoid costly one-hot fallback when already numeric.
+        if all(pd.api.types.is_numeric_dtype(dt) for dt in Xtr.dtypes):
+            Xtr_num = Xtr.to_numpy()
+            if Xva is None:
+                return Xtr_num, None
+            if isinstance(Xva, pd.DataFrame):
+                Xva_num = Xva.reindex(columns=Xtr.columns, fill_value=0).to_numpy()
+            else:
+                Xva_num = np.asarray(Xva)
+            return Xtr_num, Xva_num
         Xtr_d = pd.get_dummies(Xtr, drop_first=False)
         if Xva is not None:
             Xva_d = pd.get_dummies(Xva, drop_first=False)
@@ -65,6 +73,8 @@ def ensure_numeric_matrix(Xtr, Xva=None):
         else:
             Xva_d = None
         return Xtr_d.to_numpy(), None if Xva_d is None else Xva_d.to_numpy()
+    if isinstance(Xtr, np.ndarray) and Xtr.dtype != object:
+        return Xtr, Xva
     # fallback: try to coerce numpy object array into DataFrame then dummies
     Xtr_df = pd.DataFrame(Xtr)
     Xtr_d = pd.get_dummies(Xtr_df, drop_first=False)
@@ -360,18 +370,20 @@ class NestedCVRunner:
         self,
         trial: optuna.Trial,
         model_name: str,
+        policy: Dict[str, Any],
+        fixed: Dict[str, Any],
+        search: Dict[str, Any],
+        fixed_r: Dict[str, Any],
+        search_r: Dict[str, Any],
         residual_cfg: Optional[dict],
-        X_train: pd.DataFrame,
-        y_train_log: np.ndarray,
-        y_train_price: np.ndarray,
         seed: int,
         outer_fold: int,
         run_id: str,
+        inner_folds: List[Dict[str, Any]],
         pre_cache: dict,
         stopping_policy: CoverageAwareEarlyStoppingPolicy,
     ) -> float:
 
-        fixed, search = self.space.get(model_name)
         params = {**fixed, **suggest_from_space(trial, search)}
         if model_name == "RandomForest" and params.get("bootstrap") is False:
             params["max_samples"] = None
@@ -385,23 +397,32 @@ class NestedCVRunner:
             )
         )
 
-        default_policy = DEFAULT_PREPROCESS_POLICY
-        scores = []
-        for step, (tr, va) in enumerate(
-            self.inner_splitter.split(X_train, y_train_log, seed),
-            start=1,
-        ):
-            Xtr_raw = X_train.iloc[tr]
-            Xva_raw = X_train.iloc[va]
-            ytr = y_train_log[tr]
-            yva = y_train_log[va]
-            yva_price = y_train_price[va]
+        residual_cfg_use = residual_cfg
+        if residual_cfg is not None:
+            residual_cfg_use = dict(residual_cfg)
+            residual_params = dict(residual_cfg.get("params", {}))
+            residual_params.update(fixed_r)
+            residual_params.update(
+                suggest_from_space(
+                    trial,
+                    search_r,
+                    name_prefix=f"residual__{residual_cfg['kind']}__",
+                )
+            )
+            residual_cfg_use["params"] = residual_params
 
-            key = make_pre_cache_key(model_name, seed, tr)
+        scores = []
+        for fold in inner_folds:
+            step = fold["step"]
+            Xtr_raw = fold["Xtr_raw"]
+            Xva_raw = fold["Xva_raw"]
+            ytr = fold["ytr"]
+            yva = fold["yva"]
+            yva_price = fold["yva_price"]
+            key = fold["pre_key"]
             if self.cfg.preprocessing_cache and key in pre_cache:
                 pre, Xtr, Xva = pre_cache[key]
             else:
-                policy = get_preprocess_policy(model_name, default_policy)
                 pre = self._preprocessor_factory(
                     PreprocessSpec(
                         cat_encoding=policy["cat_encoding"],
@@ -416,23 +437,10 @@ class NestedCVRunner:
                 )
                 Xtr = pre.fit_transform(Xtr_raw, ytr)
                 Xva = pre.transform(Xva_raw)
+                if model_name == "XGBoost":
+                    Xtr, Xva = ensure_numeric_matrix(Xtr, Xva)
                 if self.cfg.preprocessing_cache:
                     pre_cache[key] = (pre, Xtr, Xva)
-
-            residual_cfg_use = residual_cfg
-            if residual_cfg is not None:
-                residual_cfg_use = dict(residual_cfg)
-                residual_params = dict(residual_cfg.get("params", {}))
-                fixed_r, search_r = self.space.get_residual(model_name, residual_cfg["kind"])
-                residual_params.update(fixed_r)
-                residual_params.update(
-                    suggest_from_space(
-                        trial,
-                        search_r,
-                        name_prefix=f"residual__{residual_cfg['kind']}__",
-                    )
-                )
-                residual_cfg_use["params"] = residual_params
 
             model = build_model(
                 model_name,
@@ -440,7 +448,7 @@ class NestedCVRunner:
                 params=params,
                 residual_cfgs=[residual_cfg_use] if residual_cfg_use else None,
             )
-            if model_name == "XGBoost":
+            if model_name == "XGBoost" and not self.cfg.preprocessing_cache:
                 Xtr, Xva = ensure_numeric_matrix(Xtr, Xva)
             model.fit(Xtr, ytr, Xva, yva)
 
@@ -480,6 +488,13 @@ class NestedCVRunner:
 
         rows = []
         default_policy = DEFAULT_PREPROCESS_POLICY
+        model_set = {m for m, _ in self.expanded_models}
+        coverage_params_by_model = {
+            m: extract_coverage_params_from_json(self.space, m) for m in model_set
+        }
+        preprocess_policy_by_model = {
+            m: get_preprocess_policy(m, default_policy) for m in model_set
+        }
         for ofold, (tr, te) in enumerate(
             self.outer_splitter.split(self.X, self.y_log, self.cfg.seed),
             start=1,
@@ -496,16 +511,41 @@ class NestedCVRunner:
             fold_seed = self.cfg.seed + ofold
 
             pre_cache = {}
+            inner_folds_by_model = {}
             for model_name, residual_cfg in self.expanded_models:
+                fixed, search = self.space.get(model_name)
+                fixed_r: Dict[str, Any] = {}
+                search_r: Dict[str, Any] = {}
+                if residual_cfg is not None and residual_cfg.get("kind"):
+                    fixed_r, search_r = self.space.get_residual(model_name, residual_cfg["kind"])
+
+                if model_name not in inner_folds_by_model:
+                    prepared_folds = []
+                    for step, (itr, iva) in enumerate(
+                        self.inner_splitter.split(Xtr_raw, ytr_log, fold_seed),
+                        start=1,
+                    ):
+                        prepared_folds.append(
+                            {
+                                "step": step,
+                                "Xtr_raw": Xtr_raw.iloc[itr],
+                                "Xva_raw": Xtr_raw.iloc[iva],
+                                "ytr": ytr_log[itr],
+                                "yva": ytr_log[iva],
+                                "yva_price": ytr_price[iva],
+                                "pre_key": make_pre_cache_key(model_name, fold_seed, itr),
+                            }
+                        )
+                    inner_folds_by_model[model_name] = prepared_folds
+
+                inner_folds = inner_folds_by_model[model_name]
+
                 residual_tag = residual_cfg["kind"] if residual_cfg is not None else "base"
                 study_name_custom = f"{model_name}_OuterFold_{ofold}_residual_cfg_{residual_tag}"
                 study = self._create_study(seed=self.cfg.optuna_seed + ofold, 
                                            study_name=study_name_custom)
 
-                coverage_params = extract_coverage_params_from_json(
-                    self.space, 
-                    model_name
-                )
+                coverage_params = coverage_params_by_model[model_name]
 
                 coverage_tracker = CoverageTracker(coverage_params)
                 stopping_policy = CoverageAwareEarlyStoppingPolicy(
@@ -528,13 +568,16 @@ class NestedCVRunner:
                     lambda t: self._inner_objective(
                         t,
                         model_name,
+                        preprocess_policy_by_model[model_name],
+                        fixed,
+                        search,
+                        fixed_r,
+                        search_r,
                         residual_cfg,
-                        Xtr_raw,
-                        ytr_log,
-                        ytr_price,
                         fold_seed,
                         ofold,
                         self.run_id,
+                        inner_folds,
                         pre_cache,
                         stopping_policy
                     ),
@@ -543,13 +586,17 @@ class NestedCVRunner:
                     callbacks=[callback],
                 )
 
-                fixed, _ = self.space.get(model_name)
-                complete_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+                has_complete_trial = any(
+                    t.state == optuna.trial.TrialState.COMPLETE for t in study.trials
+                )
                 # handle fallback or raise a clearer error
-                if not complete_trials:
+                if not has_complete_trial:
                     raise RuntimeError(f"No completed trials for model {model_name} in outer fold {ofold}.")
                 
                 best_params = {**fixed, **study.best_params}
+                best_params = {k: v for k, v in best_params.items() if not k.startswith("residual__")}
+                if model_name == "RandomForest" and best_params.get("bootstrap") is False:
+                    best_params["max_samples"] = None
 
                 best_residual_cfg = study.best_trial.user_attrs.get("residual_cfg")
 
@@ -564,7 +611,7 @@ class NestedCVRunner:
                 self.best_params_.setdefault(model_name, []).append(best_params)
 
                 ## --- retrain on full outer train ---
-                policy = get_preprocess_policy(model_name, default_policy)
+                policy = preprocess_policy_by_model[model_name]
                 pre = self._preprocessor_factory(
                     PreprocessSpec(
                         cat_encoding=policy["cat_encoding"],
@@ -584,9 +631,7 @@ class NestedCVRunner:
                 feature_names = pre.get_feature_names_out()
 
                 if model_name == "XGBoost":
-                    best_params["monotone_constraints"] = build_monotone_constraints(
-                        list(feature_names)
-                    )
+                    best_params["monotone_constraints"] = build_monotone_constraints(feature_names)
 
                 model = build_model(
                     model_name,
@@ -622,22 +667,16 @@ class NestedCVRunner:
                 pred = model.predict(Xte)
                 pred_price = np.exp(pred) if self.cfg.log_target else pred
 
-                r2 = r2_score(yte_price, pred_price)
-                mae = mean_absolute_error(yte_price, pred_price)
-                medae = median_absolute_error(yte_price, pred_price)
-                mse = mean_squared_error(yte_price, pred_price)
-                rmse = np.sqrt(mse)
-
                 label = model_label(model_name, residual_cfg)
                 rows.append(
                     dict(
                         outer_fold=ofold,
                         model=label,
-                        R2=r2,
-                        MAE=mae,
-                        MedAE=medae,
-                        MSE=mse,
-                        RMSE=rmse,
+                        R2=r2_score(yte_price, pred_price),
+                        MAE=mean_absolute_error(yte_price, pred_price),
+                        MedAE=median_absolute_error(yte_price, pred_price),
+                        MSE=mean_squared_error(yte_price, pred_price),
+                        RMSE=np.sqrt(mean_squared_error(yte_price, pred_price)),
                     )
                 )
 
@@ -653,12 +692,26 @@ class NestedCVRunner:
                         explain_policy=getattr(shap_model, "explain_policy", None),
                         model=getattr(shap_model, "model", shap_model),
                         X_test=Xte,
-                        feature_names=pre.get_feature_names_out(),
+                        feature_names=feature_names,
                     )
                 )
             self.observer.on_outer_fold_end(
                 RunContext(run_id=self.run_id, outer_fold=ofold)
             )
+
+        # Keep only keys common across outer folds to prevent unstable aggregation crashes.
+        for model_name, params_list in self.best_params_.items():
+            if len(params_list) < 2:
+                continue
+            common_keys = set(params_list[0]).intersection(*params_list[1:])
+            if not common_keys:
+                for p in params_list:
+                    p.clear()
+            else:
+                for p in params_list:
+                    if len(p) > len(common_keys):
+                        for k in (p.keys() - common_keys):
+                            del p[k]
 
         self.results_ = pd.DataFrame(rows)
         return self.results_

@@ -15,9 +15,13 @@ def summarize_mean_std(
     decimals: int = 4,
     format: bool = False,
 ) -> pd.DataFrame:
+    # Dynamically identify metric columns (numeric columns excluding metadata)
+    meta_cols = {"model", "outer_fold"}
+    metric_cols = [c for c in df_results.columns if c not in meta_cols and pd.api.types.is_numeric_dtype(df_results[c])]
+
     s = (
         df_results
-        .groupby("model")[["R2","MAE","MedAE","MSE","RMSE"]]
+        .groupby("model")[metric_cols]
         .agg(["mean","std"])
         .reset_index()
     )
@@ -79,17 +83,18 @@ def paired_tests(
         if baseline_col not in keep:
             keep = [baseline_col] + keep
         pivot = pivot[keep]
-    base = pivot[baseline_col]
+    base = pivot[baseline_col].to_numpy(copy=False)
     out = []
     for m in pivot.columns:
         if m == baseline_col:
             continue
+        vals = pivot[m].to_numpy(copy=False)
         out.append({
             "metric": metric,
             "baseline": baseline_col,
             "model": m,
-            "paired_t_p": float(ttest_rel(pivot[m], base).pvalue),
-            "wilcoxon_p": float(wilcoxon(pivot[m], base).pvalue),
+            "paired_t_p": float(ttest_rel(vals, base).pvalue),
+            "wilcoxon_p": float(wilcoxon(vals, base).pvalue),
             "n_outer_folds": int(pivot.shape[0])
         })
     if not out:
@@ -97,20 +102,34 @@ def paired_tests(
     return pd.DataFrame(out).sort_values(["paired_t_p","wilcoxon_p"])
 
 
-def significance_matrix(df_results: pd.DataFrame, metric: str = "MAE") -> pd.DataFrame:
+def significance_matrix(
+    df_results: pd.DataFrame,
+    metric: str = "MAE",
+    models: list[str] | None = None,
+) -> pd.DataFrame:
     _ensure_pandas4warning()
     pivot = df_results.pivot(index="outer_fold", columns="model", values=metric)
+    if models is not None:
+        keep = match_many(pivot, models)
+        if keep:
+            keep = list(dict.fromkeys(keep))
+            pivot = pivot[keep]
+        else:
+            return pd.DataFrame(columns=["metric","model_a","model_b","paired_t_p","wilcoxon_p","n_outer_folds"])
     models = list(pivot.columns)
+    values_by_model = {m: pivot[m].to_numpy(copy=False) for m in models}
     out = []
     for i in range(len(models)):
         for j in range(i + 1, len(models)):
             m1, m2 = models[i], models[j]
+            a = values_by_model[m1]
+            b = values_by_model[m2]
             out.append({
                 "metric": metric,
                 "model_a": m1,
                 "model_b": m2,
-                "paired_t_p": float(ttest_rel(pivot[m1], pivot[m2]).pvalue),
-                "wilcoxon_p": float(wilcoxon(pivot[m1], pivot[m2]).pvalue),
+                "paired_t_p": float(ttest_rel(a, b).pvalue),
+                "wilcoxon_p": float(wilcoxon(a, b).pvalue),
                 "n_outer_folds": int(pivot.shape[0]),
             })
     if not out:
@@ -130,5 +149,10 @@ class DefaultEvaluator(Evaluator):
     ) -> pd.DataFrame:
         return paired_tests(df_results, metric=metric, baseline=baseline)
 
-    def significance_matrix(self, df_results: pd.DataFrame, metric: str = "MAE") -> pd.DataFrame:
-        return significance_matrix(df_results, metric=metric)
+    def significance_matrix(
+        self,
+        df_results: pd.DataFrame,
+        metric: str = "MAE",
+        models: list[str] | None = None,
+    ) -> pd.DataFrame:
+        return significance_matrix(df_results, metric=metric, models=models)

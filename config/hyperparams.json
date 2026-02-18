@@ -33,14 +33,14 @@
       },
       "search": {
         "C": {"type": "categorical", "choices": [10, 20]},
-        "gamma": {"type": "float", "low": 0.1, "high": 1.0, "log": true},
-        "epsilon": {"type": "float", "low": 0.1, "high": 1.0, "log": true}
+        "gamma": {"type": "float", "low": 0.01, "high": 1.0, "log": true},
+        "epsilon": {"type": "float", "low": 0.01, "high": 1.0, "log": true}
       }
     },
     "XGBoost": {
       "n_trials": 200,
       "fixed": {
-        "tree_method": "hist", 
+        "tree_method": "hist",
         "n_jobs": -1
       },
       "search": {
@@ -99,7 +99,8 @@
     },
     "LinearRegression": {
       "fixed": {},
-      "search": {}
+      "search": {
+      }
     }
   },
   "residuals": {

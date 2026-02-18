@@ -30,11 +30,11 @@ class DataReadConfig:
 
 
 def _normalize_columns(df: pd.DataFrame, cfg: DataReadConfig) -> pd.DataFrame:
-    cols = list(df.columns)
+    cols = df.columns
     if cfg.strip_colnames:
-        cols = [c.strip() for c in cols]
+        cols = cols.str.strip()
     if cfg.lowercase_colnames:
-        cols = [c.lower() for c in cols]
+        cols = cols.str.lower()
     df.columns = cols
     return df
 
@@ -54,30 +54,27 @@ def read_csv_folder(cfg: DataReadConfig) -> pd.DataFrame:
     exclude = set(cfg.exclude_filenames or [])
 
     # file discovery
-    if cfg.recursive:
-        files = sorted(root.rglob(cfg.pattern))
-    else:
-        files = sorted(root.glob(cfg.pattern))
-
-    files = [p for p in files if p.is_file() and p.name not in exclude]
+    glob_method = root.rglob if cfg.recursive else root.glob
+    files = sorted(p for p in glob_method(cfg.pattern) if p.is_file() and p.name not in exclude)
 
     if not files:
         raise FileNotFoundError(
             f"No files matched in {root.resolve()} with pattern={cfg.pattern} (recursive={cfg.recursive})."
         )
 
+    read_kwargs = {}
+    if cfg.encoding is not None:
+        read_kwargs["encoding"] = cfg.encoding
+    if cfg.sep is not None:
+        read_kwargs["sep"] = cfg.sep
+
     frames = []
     for p in files:
-        read_kwargs = {}
-        if cfg.encoding is not None:
-            read_kwargs["encoding"] = cfg.encoding
-        if cfg.sep is not None:
-            read_kwargs["sep"] = cfg.sep
         df = pd.read_csv(p, **read_kwargs)
 
         # Rename the 'tax(£)' column to 'tax' if it exists.
         if 'tax(£)' in df.columns:
-            df = df.rename(columns={'tax(£)': 'tax'})
+            df.rename(columns={'tax(£)': 'tax'}, inplace=True)
         
         df = _normalize_columns(df, cfg)
         if cfg.add_source_column:
@@ -107,17 +104,16 @@ def coerce_dtypes(
     - numeric cols -> to_numeric
     - categorical cols -> astype('category') (optional)
     """
+    valid_numeric = [c for c in (numeric_cols or []) if c in df.columns]
+    valid_categorical = [c for c in (categorical_cols or []) if c in df.columns]
+    if not valid_numeric and not valid_categorical:
+        return df.copy()
+
     df = df.copy()
-
-    if numeric_cols:
-        for c in numeric_cols:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors=errors)
-
-    if categorical_cols:
-        for c in categorical_cols:
-            if c in df.columns:
-                df[c] = df[c].astype("category")
+    if valid_numeric:
+        df[valid_numeric] = df[valid_numeric].apply(pd.to_numeric, errors=errors)
+    if valid_categorical:
+        df[valid_categorical] = df[valid_categorical].astype("category")
 
     return df
 
@@ -131,7 +127,6 @@ def basic_clean(
     Basic cleaning rules that are safe and generic.
     - Optionally drop rows with missing target.
     """
-    df = df.copy()
     if dropna_target and target in df.columns:
-        df = df.dropna(subset=[target])
-    return df
+        return df.dropna(subset=[target])
+    return df.copy()

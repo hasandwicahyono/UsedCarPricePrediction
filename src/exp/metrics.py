@@ -53,6 +53,21 @@ class BaseMetric:
         # loss-like value for pruning/reporting
         return score if self.direction == "minimize" else -score
     
+    def _sanitize(self, y_true: np.ndarray, y_pred: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        # Optimization: ravel() avoids copy if memory is contiguous, unlike flatten()
+        y_true = np.asanyarray(y_true).ravel()
+        y_pred = np.asanyarray(y_pred).ravel()
+        
+        if y_true.shape != y_pred.shape:
+            raise ValueError(f"Shape mismatch for metric {self.name}: y_true {y_true.shape} vs y_pred {y_pred.shape}")
+
+        mask = np.isfinite(y_true) & np.isfinite(y_pred)
+        if not mask.all():
+            y_true = y_true[mask]
+            y_pred = y_pred[mask]
+            
+        return y_true, y_pred
+
     @abstractmethod
     def compute(self, y_true: np.ndarray, y_pred: np.ndarray) -> float: ...
 
@@ -64,7 +79,9 @@ class MAEMetric(BaseMetric):
     direction: Direction = "minimize"
 
     def compute(self, y_true, y_pred) -> float:
-        return float(mean_absolute_error(y_true, y_pred))
+        y_t, y_p = self._sanitize(y_true, y_pred)
+        if len(y_t) == 0: return float("nan")
+        return float(mean_absolute_error(y_t, y_p))
 
 
 @register_metric("rmse")
@@ -74,7 +91,9 @@ class RMSEMetric(BaseMetric):
     direction: Direction = "minimize"
 
     def compute(self, y_true, y_pred) -> float:
-        return float(np.sqrt(mean_squared_error(y_true, y_pred)))
+        y_t, y_p = self._sanitize(y_true, y_pred)
+        if len(y_t) == 0: return float("nan")
+        return float(np.sqrt(mean_squared_error(y_t, y_p)))
 
 
 @register_metric("mse")
@@ -84,7 +103,9 @@ class MSEMetric(BaseMetric):
     direction: Direction = "minimize"
 
     def compute(self, y_true, y_pred) -> float:
-        return float(mean_squared_error(y_true, y_pred))
+        y_t, y_p = self._sanitize(y_true, y_pred)
+        if len(y_t) == 0: return float("nan")
+        return float(mean_squared_error(y_t, y_p))
 
 
 @register_metric("medae")
@@ -94,7 +115,9 @@ class MedAEMetric(BaseMetric):
     direction: Direction = "minimize"
 
     def compute(self, y_true, y_pred) -> float:
-        return float(median_absolute_error(y_true, y_pred))
+        y_t, y_p = self._sanitize(y_true, y_pred)
+        if len(y_t) == 0: return float("nan")
+        return float(median_absolute_error(y_t, y_p))
 
 
 @register_metric("r2")
@@ -105,7 +128,9 @@ class R2Metric(BaseMetric):
     direction: Direction = "maximize"
 
     def compute(self, y_true, y_pred) -> float:
-        return float(r2_score(y_true, y_pred))
+        y_t, y_p = self._sanitize(y_true, y_pred)
+        if len(y_t) == 0: return float("nan")
+        return float(r2_score(y_t, y_p))
 
 
 @register_metric("negmse")
@@ -115,7 +140,9 @@ class NegMSEMetric(BaseMetric):
     direction: Direction = "maximize"
 
     def compute(self, y_true, y_pred) -> float:
-        return -float(mean_squared_error(y_true, y_pred))
+        y_t, y_p = self._sanitize(y_true, y_pred)
+        if len(y_t) == 0: return float("nan")
+        return -float(mean_squared_error(y_t, y_p))
     
 
 @lru_cache(maxsize=None)
@@ -128,9 +155,3 @@ def _make_metric_cached(metric_key: str) -> MetricStrategy:
 
 def make_metric(metric_name: str) -> MetricStrategy:
     return _make_metric_cached(metric_name.strip().lower())
-
-
-class MetricFactory:
-    @staticmethod
-    def create(metric_name: str) -> MetricStrategy:
-        return make_metric(metric_name)

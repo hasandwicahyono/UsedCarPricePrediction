@@ -46,15 +46,36 @@ class ExperimentConfig:
     early_stopping_patience: int = 5
 
     # Metric
-    metric_name: str = "r2"         # r2, mse, negmse, rmse, mae, medae 
-    metric_opt: str = "maximize"    # or "minimize"
+    metric_name: str = "mae"         # r2, mse, negmse, rmse, mae, medae 
+    metric_opt: str = "minimize"    # "minimize" or "maximize", auto-inferred if None
+    report_metrics: List[str] = field(default_factory=lambda: ["r2", "mae", "medae", "mse", "rmse"])
 
     # Residual Stacking
     residuals: Dict[str, List[Dict[str, Any]]] = field(default_factory=lambda: {
         "DecisionTree": [
             {"kind": "None", "params": {}},
             {"kind": "ElasticNet", "params": {"alpha": 0.001, "l1_ratio": 0.5}},
-            {"kind": "Quantile", "params": {"quantile": 0.75, "alpha": 0.001}},
+            #{"kind": "Quantile", "params": {"quantile": 0.75, "alpha": 0.001}},
+            {"kind": "Huber", "params": {"epsilon": 1.35}},
+            {
+                "kind": "PseudoHuber",
+                "params": {
+                    "n_estimators": 200,
+                    "max_depth": 2,
+                    "learning_rate": 0.05,
+                    "subsample": 0.8,
+                    "colsample_bytree": 0.8,
+                    "reg_alpha": 0.1,
+                    "reg_lambda": 1.0,
+                    "tree_method": "hist",
+                    "n_jobs": -1,
+                },
+            },
+        ],
+        "RandomForest": [
+            {"kind": "None", "params": {}},
+            {"kind": "ElasticNet", "params": {"alpha": 0.001, "l1_ratio": 0.5}},
+            #{"kind": "Quantile", "params": {"quantile": 0.75, "alpha": 0.001}},
             {"kind": "Huber", "params": {"epsilon": 1.35}},
             {
                 "kind": "PseudoHuber",
@@ -88,26 +109,6 @@ class ExperimentConfig:
                 },
             },
         ],
-        "RandomForest": [
-            {"kind": "None", "params": {}},
-            {"kind": "ElasticNet", "params": {"alpha": 0.001, "l1_ratio": 0.5}},
-            {"kind": "Quantile", "params": {"quantile": 0.75, "alpha": 0.001}},
-            {"kind": "Huber", "params": {"epsilon": 1.35}},
-            {
-                "kind": "PseudoHuber",
-                "params": {
-                    "n_estimators": 200,
-                    "max_depth": 2,
-                    "learning_rate": 0.05,
-                    "subsample": 0.8,
-                    "colsample_bytree": 0.8,
-                    "reg_alpha": 0.1,
-                    "reg_lambda": 1.0,
-                    "tree_method": "hist",
-                    "n_jobs": -1,
-                },
-            },
-        ],
     })
 
     # Pruning
@@ -125,7 +126,7 @@ class ExperimentConfig:
     def __post_init__(self):
         # --- auto-derive optimization direction ---
         metric = self.metric_name.lower()
-        expected = "maximize" if metric in {"r2", "r^2", "negmse"} else "minimize"
+        expected = "maximize" if metric in {"r2", "r^2", "negmse", "nmse"} else "minimize"
         if self.metric_opt is None:
             self.metric_opt = expected
         elif self.metric_opt != expected:
@@ -139,16 +140,3 @@ class ExperimentConfig:
             raise ValueError(
                 f"metric_opt must be 'minimize' or 'maximize', got {self.metric_opt}"
             )
-
-
-class ExperimentConfigBuilder:
-    def __init__(self):
-        self._cfg = ExperimentConfig()
-
-    def set(self, **kwargs) -> "ExperimentConfigBuilder":
-        for k, v in kwargs.items():
-            setattr(self._cfg, k, v)
-        return self
-
-    def build(self) -> ExperimentConfig:
-        return self._cfg

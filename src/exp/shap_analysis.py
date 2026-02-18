@@ -29,16 +29,18 @@ class ShapAnalyzer:
         self.max_eval_samples = max_eval_samples
         self.rng = np.random.default_rng(seed)
         self.grouped = self._group(models)
+        self._idx_map_cache = {}
         self.plot_manager = plot_manager
 
     def _group(self, models: list[str] | None = None):
         g = defaultdict(list)
+        model_filter = set(models) if models is not None else None
         for d in self.store:
             labels = [d["model_name"]]
             if "model_label" in d and d["model_label"] != d["model_name"]:
                 labels.append(d["model_label"])
 
-            if models is not None and not any(m in models for m in labels):
+            if model_filter is not None and not any(lbl in model_filter for lbl in labels):
                 continue
 
             for label in labels:
@@ -59,9 +61,9 @@ class ShapAnalyzer:
         if not common:
             raise ValueError(f"No common features across folds for {model_name}")
         common_ordered = [f for f in feature_lists[0] if f in common]
+        common_tuple = tuple(common_ordered)
 
         X_all, sv_all = [], []
-        kernel_policies = {"kernel"}
 
         for item in tqdm(entries, desc=f"Computing SHAP for {model_name}"):
             if "X_test" not in item or "model" not in item:
@@ -84,20 +86,26 @@ class ShapAnalyzer:
             explainer = ShapExplainerFactory.create(policy, model, X_bg) #build_shap_explainer(policy, model, X_bg)
 
             X_eval = X
-            if policy in kernel_policies and X.shape[0] > self.max_eval_samples:
+            if policy == "kernel" and X.shape[0] > self.max_eval_samples:
                 idx = self.rng.choice(X.shape[0], self.max_eval_samples, replace=False)
                 X_eval = X[idx]
 
             sv = np.asarray(explainer.explain(X_eval))
 
             fn_item = list(item["feature_names"])
-            idx_lookup = {f: i for i, f in enumerate(fn_item)}
-            idx_map = [idx_lookup[f] for f in common_ordered]
+            cache_key = (model_name, tuple(fn_item), common_tuple)
+            idx_map = self._idx_map_cache.get(cache_key)
+            if idx_map is None:
+                idx_lookup = {f: i for i, f in enumerate(fn_item)}
+                idx_map = [idx_lookup[f] for f in common_ordered]
+                self._idx_map_cache[cache_key] = idx_map
 
             X_all.append(X_eval[:, idx_map])
             sv_all.append(sv[:, idx_map])
  
         cleaned_names = [clean_feature_name(f) for f in common_ordered]
+        if len(X_all) == 1:
+            return X_all[0], sv_all[0], cleaned_names
         return np.vstack(X_all), np.vstack(sv_all), cleaned_names
 
     def beeswarm(self, model_name: str, max_display: int = 20, figsize=(10, 6), save: bool = True):

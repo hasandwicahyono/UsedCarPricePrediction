@@ -32,16 +32,30 @@ def aggregate_hyperparams(param_dicts):
     keys = sorted({k for d in param_dicts for k in d.keys()})
 
     for k in keys:
-        values = [p[k] for p in param_dicts if k in p]
+        values = []
+        all_numeric = True
+        all_int = True
+
+        for p in param_dicts:
+            if k not in p:
+                continue
+            v = v.item() if isinstance(v, np.generic) else v # _to_builtin_scalar(p[k])
+            if isinstance(v, list):
+                v = tuple(v)
+            values.append(v)
+
+            if not isinstance(v, (int, float)) and not isinstance(v, bool): #_is_numeric(v):
+                all_numeric = False
+                all_int = False
+            elif not isinstance(v, int):
+                all_int = False
+
         if not values:
             continue
-        # make list-like hashable for mode calculation
-        if any(isinstance(v, list) for v in values):
-            values = [tuple(v) if isinstance(v, list) else v for v in values]
 
-        if isinstance(values[0], (int, float)):
-            agg = float(np.median(values))
-            if isinstance(values[0], int):
+        if all_numeric:
+            agg = float(np.median(np.asarray(values, dtype=float)))
+            if all_int:
                 agg = int(round(agg))
             aggregated[k] = agg
         else:
@@ -180,24 +194,44 @@ class ExperimentFacade:
 
         metric_col = self.cfg.metric_name.upper()
         metric_opt = self.cfg.metric_opt
+        score_lookup = {}
+        if self.results_ is not None and metric_col in self.results_.columns:
+            for row in self.results_[["model", "outer_fold", metric_col]].itertuples(index=False, name=None):
+                key = (row[0], row[1])
+                if key not in score_lookup:
+                    score_lookup[key] = float(row[2]) if pd.notna(row[2]) else None
+        records_by_model = {}
+        for rec in self.runner.best_params_records_:
+            m = rec.get("model")
+            if m is None:
+                continue
+            records_by_model.setdefault(m, []).append(rec)
+        pre_cache = {}
 
         for model_name in self.model_names:
             print(f"[final fit] {model_name}")
 
             # build preprocessing
             policy = get_preprocess_policy(model_name, DEFAULT_PREPROCESS_POLICY)
-            pre = build_preprocessor(
-                self.schema,
-                PreprocessSpec(
-                    cat_encoding=policy["cat_encoding"],
-                    use_feature_selection=policy["use_feature_selection"],
-                    seed=self.cfg.seed,
-                ),
-            )
-            Xp = pre.fit_transform(X, y)
+            pre_key = (policy["cat_encoding"], bool(policy["use_feature_selection"]))
+            if pre_key in pre_cache:
+                pre, Xp = pre_cache[pre_key]
+            else:
+                pre = build_preprocessor(
+                    self.schema,
+                    PreprocessSpec(
+                        cat_encoding=policy["cat_encoding"],
+                        use_feature_selection=policy["use_feature_selection"],
+                        seed=self.cfg.seed,
+                    ),
+                )
+                Xp = pre.fit_transform(X, y)
+                pre_cache[pre_key] = (pre, Xp)
 
             # build model with BEST params
             params = best_params[model_name]["aggregated"]
+            if model_name == "RandomForest" and params.get("bootstrap") is False:
+                params["max_samples"] = None
             residual_cfg = best_params[model_name].get("residual_cfg")
             model = build_model(
                 model_name,
@@ -247,23 +281,13 @@ class ExperimentFacade:
 
             # optional top-k ensemble using per-fold best params
             if top_k and model_name in best_params:
-                records = [
-                    r for r in self.runner.best_params_records_
-                    if r.get("model") == model_name
-                ]
+                records = records_by_model.get(model_name, [])
                 if records:
                     scored = []
                     for r in records:
                         label = model_label(model_name, r.get("residual_cfg"))
                         ofold = r.get("outer_fold")
-                        score = None
-                        if self.results_ is not None:
-                            rows = self.results_[
-                                (self.results_["model"] == label)
-                                & (self.results_["outer_fold"] == ofold)
-                            ]
-                            if not rows.empty and metric_col in rows.columns:
-                                score = float(rows.iloc[0][metric_col])
+                        score = score_lookup.get((label, ofold))
                         scored.append((score, r))
 
                     # sort by score, fallback to original order if score is None
@@ -295,8 +319,8 @@ class ExperimentFacade:
     def significance(self, metric="MAE", baseline="RandomForest", models: list[str] | None = None):
         return paired_tests(self.runner.results_, metric=metric, baseline=baseline, models=models)
 
-    def significance_matrix(self, metric="MAE"):
-        return self.evaluator.significance_matrix(self.runner.results_, metric=metric)
+    def significance_matrix(self, metric="MAE", models: list[str] | None = None):
+        return self.evaluator.significance_matrix(self.runner.results_, metric=metric, models=models)
 
     def shap(self, plot_dir: str = "outputs/figures/shap", models: list[str] | None = None):
         pm = PlotManager(base_dir=plot_dir)

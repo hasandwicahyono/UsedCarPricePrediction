@@ -70,17 +70,28 @@ class SafePowerTransformer(BaseEstimator, TransformerMixin):
         n_features = X.shape[1]
         return [f"feature_{i}" for i in range(n_features)]
 
-    def _get_column(self, X, idx):
-        if hasattr(X, "iloc"):
-            return X.iloc[:, idx].to_numpy()
-        return np.asarray(X)[:, idx]
-
     def fit(self, X, y=None):
         feature_names = self._get_feature_names(X)
+        all_idx = np.arange(len(feature_names), dtype=int)
+        X_all = self._select_columns(X, all_idx)
+
+        # Fast path: fit once when all numeric columns are valid.
+        try:
+            self._pt = PowerTransformer(
+                method=self.method,
+                standardize=self.standardize,
+                copy=self.copy,
+            ).fit(X_all, y)
+            self._good_idx = all_idx
+            self._good_names = list(feature_names)
+            return self
+        except Exception:
+            pass
+
         good_idx = []
         bad = []
         for i, name in enumerate(feature_names):
-            col = self._get_column(X, i)
+            col = X_all[:, i]
             try:
                 PowerTransformer(
                     method=self.method,
@@ -108,7 +119,7 @@ class SafePowerTransformer(BaseEstimator, TransformerMixin):
 
         self._good_idx = np.array(good_idx, dtype=int)
         self._good_names = [feature_names[i] for i in self._good_idx]
-        X_good = self._select_columns(X, self._good_idx)
+        X_good = X_all[:, self._good_idx]
         self._pt = PowerTransformer(
             method=self.method,
             standardize=self.standardize,

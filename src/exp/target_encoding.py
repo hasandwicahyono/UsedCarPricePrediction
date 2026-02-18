@@ -31,28 +31,28 @@ class LeakageSafeTargetEncoder(BaseEstimator, TransformerMixin):
         self.mapping_: Dict[str, Dict[Any, float]] = {}
 
     def fit(self, X: pd.DataFrame, y):
-        X = pd.DataFrame(X).copy()
-        y = np.asarray(y).astype(float)
+        X = pd.DataFrame(X, copy=False)
+        y = np.asarray(y, dtype=float)
+        y_series = pd.Series(y, index=X.index)
         self.global_mean_ = float(np.mean(y))
 
         self.mapping_.clear()
         for c in self.cols:
             s = X[c]
 
-            # group stats
-            df = pd.DataFrame({"cat": s, "y": y})
-            stats = df.groupby("cat")["y"].agg(["count", "mean"])
+            # group stats without a temporary DataFrame per column
+            stats = y_series.groupby(s).agg(["count", "mean"])
 
             # smoothing:
             # enc = (count*mean + smoothing*global) / (count + smoothing)
-            cnt = stats["count"].astype(float)
-            mu = stats["mean"].astype(float)
+            cnt = stats["count"].to_numpy(dtype=float, copy=False)
+            mu = stats["mean"].to_numpy(dtype=float, copy=False)
 
             # optional: enforce min_samples_leaf by increasing shrinkage for tiny counts
             eff_cnt = np.maximum(cnt, self.min_samples_leaf)
 
             enc = (eff_cnt * mu + self.smoothing * self.global_mean_) / (eff_cnt + self.smoothing)
-            self.mapping_[c] = enc.to_dict()
+            self.mapping_[c] = dict(zip(stats.index.tolist(), enc.tolist()))
 
         return self
 
@@ -60,6 +60,7 @@ class LeakageSafeTargetEncoder(BaseEstimator, TransformerMixin):
         X = X.copy()
         if self.noise_std > 0:
             rng = np.random.default_rng(self.random_state)
+        cols_to_drop = []
         for col in self.cols:
             enc = X[col].map(self.mapping_[col])
             # Ensure numeric dtype before fillna to avoid categorical setitem errors.
@@ -68,7 +69,9 @@ class LeakageSafeTargetEncoder(BaseEstimator, TransformerMixin):
             if self.noise_std > 0:
                 enc = enc + rng.normal(0.0, self.noise_std, size=len(enc))
             X[f"{col}__te"] = enc.astype(self.output_dtype)
-            X.drop(columns=[col], inplace=True)
+            cols_to_drop.append(col)
+        if cols_to_drop:
+            X.drop(columns=cols_to_drop, inplace=True)
         return X
 
     def get_feature_names_out(self, input_features=None):

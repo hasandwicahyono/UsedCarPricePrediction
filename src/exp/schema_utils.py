@@ -108,14 +108,3 @@ def clean_feature_name(name: str) -> str:
     name = name.strip("_")
 
     return name
-
-
-class SchemaAdapter:
-    def sanitize(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
-        return sanitize_columns(df)
-
-    def infer(self, df: pd.DataFrame, target: str, cat_threshold: int = 20) -> Tuple[str, List[str], List[str]]:
-        return infer_schema(df, target=target, cat_threshold=cat_threshold)
-
-    def clean_feature_name(self, name: str) -> str:
-        return clean_feature_name(name)

@@ -9,6 +9,10 @@ from typing import Iterable
 import numpy as np
 from contextlib import contextmanager
 
+_MILEAGE_RE = re.compile(r"mileage|odometer|km", re.I)
+_YEAR_RE = re.compile(r"year", re.I)
+_ENGINE_RE = re.compile(r"engine|displacement", re.I)
+
 
 def set_seed(seed: int) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -34,11 +38,11 @@ def model_label(name: str, residual_cfg: dict | None) -> str:
 def build_monotone_constraints(feature_names: Iterable[str]) -> str:
     constraints = []
     for f in feature_names:
-        if re.search(r"mileage|odometer|km", f, re.I):
+        if _MILEAGE_RE.search(f):
             constraints.append(-1)
-        elif re.search(r"year", f, re.I):
+        elif _YEAR_RE.search(f):
             constraints.append(+1)
-        elif re.search(r"engine|displacement", f, re.I):
+        elif _ENGINE_RE.search(f):
             constraints.append(+1)
         else:
             constraints.append(0)
