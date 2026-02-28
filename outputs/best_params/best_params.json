@@ -8,27 +8,230 @@
   "best_params": [
     {
       "outer_fold": 1,
+      "model": "LinearRegression",
+      "params": {},
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 1,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 20
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 1,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 20
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
+        }
+      }
+    },
+    {
+      "outer_fold": 1,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 20
+      },
+      "residual_cfg": {
+        "kind": "Huber",
+        "params": {
+          "epsilon": 1.35
+        }
+      }
+    },
+    {
+      "outer_fold": 1,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 20
+      },
+      "residual_cfg": {
+        "kind": "PseudoHuber",
+        "params": {
+          "n_estimators": 200,
+          "max_depth": 2,
+          "learning_rate": 0.05,
+          "subsample": 0.8,
+          "colsample_bytree": 0.8,
+          "reg_alpha": 0.1,
+          "reg_lambda": 1.0,
+          "tree_method": "hist",
+          "n_jobs": -1
+        }
+      }
+    },
+    {
+      "outer_fold": 1,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 7,
+        "n_estimators": 1542,
+        "max_samples": null,
+        "min_samples_leaf": 6,
+        "max_features": 0.8,
+        "max_depth": 26,
+        "bootstrap": false
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 1,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 7,
+        "n_estimators": 1542,
+        "max_samples": null,
+        "min_samples_leaf": 6,
+        "max_features": 0.8,
+        "max_depth": 26,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
+        }
+      }
+    },
+    {
+      "outer_fold": 1,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 7,
+        "n_estimators": 1542,
+        "max_samples": null,
+        "min_samples_leaf": 6,
+        "max_features": 0.8,
+        "max_depth": 26,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "Huber",
+        "params": {
+          "epsilon": 2.462482537377837,
+          "alpha": 0.0007419858153596109
+        }
+      }
+    },
+    {
+      "outer_fold": 1,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 8,
+        "n_estimators": 1386,
+        "max_samples": null,
+        "min_samples_leaf": 4,
+        "max_features": 0.5,
+        "max_depth": 33,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "PseudoHuber",
+        "params": {
+          "n_estimators": 1180,
+          "max_depth": 3,
+          "learning_rate": 0.06475270081927678,
+          "subsample": 0.7806305270655066,
+          "colsample_bytree": 0.8897468656621832,
+          "reg_alpha": 0.2558890502054877,
+          "reg_lambda": 3.0603308209711617,
+          "tree_method": "hist",
+          "n_jobs": -1,
+          "early_stopping_rounds": 24
+        }
+      }
+    },
+    {
+      "outer_fold": 1,
+      "model": "SVR",
+      "params": {
+        "kernel": "rbf",
+        "C": 10,
+        "gamma": 0.21673288837140992,
+        "epsilon": 0.06179452831501675
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 1,
       "model": "XGBoost",
       "params": {
         "tree_method": "hist",
         "n_jobs": -1,
-        "n_estimators": 1705,
-        "max_depth": 6,
-        "min_child_weight": 8,
-        "learning_rate": 0.11855881578639947,
-        "subsample": 0.9975790629388069,
-        "colsample_bytree": 0.8728187313936585,
-        "reg_alpha": 0.0006660495541743549,
-        "early_stopping_rounds": 51,
-        "residual__Huber__epsilon": 1.7448483315773928,
-        "residual__Huber__alpha": 1.3998568908871105e-05,
+        "n_estimators": 1181,
+        "max_depth": 10,
+        "min_child_weight": 9,
+        "learning_rate": 0.07269569306356649,
+        "subsample": 0.910722485982034,
+        "colsample_bytree": 0.6748986345040026,
+        "reg_alpha": 0.0021610368080163984,
+        "early_stopping_rounds": 20,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 1,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 1181,
+        "max_depth": 10,
+        "min_child_weight": 9,
+        "learning_rate": 0.07269569306356649,
+        "subsample": 0.910722485982034,
+        "colsample_bytree": 0.6748986345040026,
+        "reg_alpha": 0.0021610368080163984,
+        "early_stopping_rounds": 20,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
+        }
+      }
+    },
+    {
+      "outer_fold": 1,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 642,
+        "max_depth": 10,
+        "min_child_weight": 1,
+        "learning_rate": 0.08730975204790163,
+        "subsample": 0.7189764277349272,
+        "colsample_bytree": 0.8018617820986585,
+        "reg_alpha": 0.08555553179591292,
+        "early_stopping_rounds": 64,
         "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
       },
       "residual_cfg": {
         "kind": "Huber",
         "params": {
-          "epsilon": 1.7448483315773928,
-          "alpha": 1.3998568908871105e-05
+          "epsilon": 1.8060735673247228,
+          "alpha": 0.0016607554205188481
         }
       }
     },
@@ -46,14 +249,6 @@
         "colsample_bytree": 0.9108452991352104,
         "reg_alpha": 0.0016960188791491889,
         "early_stopping_rounds": 22,
-        "residual__PseudoHuber__n_estimators": 620,
-        "residual__PseudoHuber__max_depth": 4,
-        "residual__PseudoHuber__learning_rate": 0.02102872728454693,
-        "residual__PseudoHuber__subsample": 0.9210316148371506,
-        "residual__PseudoHuber__colsample_bytree": 0.8582650196639069,
-        "residual__PseudoHuber__reg_alpha": 0.41776285395821033,
-        "residual__PseudoHuber__reg_lambda": 2.943996057044953,
-        "residual__PseudoHuber__early_stopping_rounds": 117,
         "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
       },
       "residual_cfg": {
@@ -63,12 +258,235 @@
           "max_depth": 4,
           "learning_rate": 0.02102872728454693,
           "subsample": 0.9210316148371506,
-          "colsample_bytree": 0.8582650196639069,
-          "reg_alpha": 0.41776285395821033,
+          "colsample_bytree": 0.858265019663907,
+          "reg_alpha": 0.4177628539582105,
           "reg_lambda": 2.943996057044953,
           "tree_method": "hist",
           "n_jobs": -1,
           "early_stopping_rounds": 117
+        }
+      }
+    },
+    {
+      "outer_fold": 1,
+      "model": "NeuralNetwork",
+      "params": {
+        "loss": "mean_squared_error",
+        "optimizer": "adam",
+        "n_layers": 1,
+        "units_layer_1": 255,
+        "units_layer_2": 254,
+        "units_layer_3": 173,
+        "units_layer_4": 252,
+        "activation": "sigmoid",
+        "learning_rate": 0.001387607088103923,
+        "momentum": 0.94499196260702,
+        "weight_decay": 1.2671683412654128e-05
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 2,
+      "model": "LinearRegression",
+      "params": {},
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 2,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 26
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 2,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 26
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
+        }
+      }
+    },
+    {
+      "outer_fold": 2,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 26
+      },
+      "residual_cfg": {
+        "kind": "Huber",
+        "params": {
+          "epsilon": 1.35
+        }
+      }
+    },
+    {
+      "outer_fold": 2,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 26
+      },
+      "residual_cfg": {
+        "kind": "PseudoHuber",
+        "params": {
+          "n_estimators": 200,
+          "max_depth": 2,
+          "learning_rate": 0.05,
+          "subsample": 0.8,
+          "colsample_bytree": 0.8,
+          "reg_alpha": 0.1,
+          "reg_lambda": 1.0,
+          "tree_method": "hist",
+          "n_jobs": -1
+        }
+      }
+    },
+    {
+      "outer_fold": 2,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 7,
+        "n_estimators": 1741,
+        "max_samples": null,
+        "min_samples_leaf": 9,
+        "max_features": 0.8,
+        "max_depth": 34,
+        "bootstrap": false
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 2,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 7,
+        "n_estimators": 1741,
+        "max_samples": null,
+        "min_samples_leaf": 9,
+        "max_features": 0.8,
+        "max_depth": 34,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
+        }
+      }
+    },
+    {
+      "outer_fold": 2,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 26,
+        "n_estimators": 303,
+        "max_samples": null,
+        "min_samples_leaf": 3,
+        "max_features": "log2",
+        "max_depth": 16,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "Huber",
+        "params": {
+          "epsilon": 1.1294674914472056,
+          "alpha": 0.024549853266735748
+        }
+      }
+    },
+    {
+      "outer_fold": 2,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 26,
+        "n_estimators": 303,
+        "max_samples": null,
+        "min_samples_leaf": 3,
+        "max_features": "log2",
+        "max_depth": 16,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "PseudoHuber",
+        "params": {
+          "n_estimators": 377,
+          "max_depth": 4,
+          "learning_rate": 0.05165960133061523,
+          "subsample": 0.8650782326732611,
+          "colsample_bytree": 0.9545383281501386,
+          "reg_alpha": 0.0004325051876081347,
+          "reg_lambda": 1.840982652046463,
+          "tree_method": "hist",
+          "n_jobs": -1,
+          "early_stopping_rounds": 168
+        }
+      }
+    },
+    {
+      "outer_fold": 2,
+      "model": "SVR",
+      "params": {
+        "kernel": "rbf",
+        "C": 20,
+        "gamma": 0.7349649643766388,
+        "epsilon": 0.04176653369654693
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 2,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 554,
+        "max_depth": 10,
+        "min_child_weight": 1,
+        "learning_rate": 0.013882385433704443,
+        "subsample": 0.8492420498063852,
+        "colsample_bytree": 0.9996947108509673,
+        "reg_alpha": 0.06851019984701776,
+        "early_stopping_rounds": 108,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 2,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 554,
+        "max_depth": 10,
+        "min_child_weight": 1,
+        "learning_rate": 0.013882385433704443,
+        "subsample": 0.8492420498063852,
+        "colsample_bytree": 0.9996947108509673,
+        "reg_alpha": 0.06851019984701776,
+        "early_stopping_rounds": 108,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
         }
       }
     },
@@ -81,20 +499,18 @@
         "n_estimators": 1743,
         "max_depth": 9,
         "min_child_weight": 7,
-        "learning_rate": 0.03637898811976289,
-        "subsample": 0.7665987537100482,
+        "learning_rate": 0.036378988119762874,
+        "subsample": 0.766598753710048,
         "colsample_bytree": 0.7794985913389357,
-        "reg_alpha": 0.0004434634418574392,
+        "reg_alpha": 0.00044346344185743997,
         "early_stopping_rounds": 40,
-        "residual__Huber__epsilon": 2.4238768939622384,
-        "residual__Huber__alpha": 0.005829722994032595,
         "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
       },
       "residual_cfg": {
         "kind": "Huber",
         "params": {
-          "epsilon": 2.4238768939622384,
-          "alpha": 0.005829722994032595
+          "epsilon": 2.423876893962238,
+          "alpha": 0.005829722994032584
         }
       }
     },
@@ -104,37 +520,252 @@
       "params": {
         "tree_method": "hist",
         "n_jobs": -1,
-        "n_estimators": 1438,
+        "n_estimators": 1804,
         "max_depth": 9,
         "min_child_weight": 8,
-        "learning_rate": 0.04981387940111725,
-        "subsample": 0.7638605481731355,
-        "colsample_bytree": 0.6718948035667706,
-        "reg_alpha": 0.002799479360783674,
-        "early_stopping_rounds": 194,
-        "residual__PseudoHuber__n_estimators": 412,
-        "residual__PseudoHuber__max_depth": 3,
-        "residual__PseudoHuber__learning_rate": 0.028249647365070223,
-        "residual__PseudoHuber__subsample": 0.8179386501138081,
-        "residual__PseudoHuber__colsample_bytree": 0.943383851089698,
-        "residual__PseudoHuber__reg_alpha": 0.3772928807638893,
-        "residual__PseudoHuber__reg_lambda": 2.983844972137575,
-        "residual__PseudoHuber__early_stopping_rounds": 155,
+        "learning_rate": 0.0390844073983365,
+        "subsample": 0.6408474736678937,
+        "colsample_bytree": 0.6460259082985956,
+        "reg_alpha": 0.031608358719731,
+        "early_stopping_rounds": 165,
         "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
       },
       "residual_cfg": {
         "kind": "PseudoHuber",
         "params": {
-          "n_estimators": 412,
+          "n_estimators": 821,
           "max_depth": 3,
-          "learning_rate": 0.028249647365070223,
-          "subsample": 0.8179386501138081,
-          "colsample_bytree": 0.943383851089698,
-          "reg_alpha": 0.3772928807638893,
-          "reg_lambda": 2.983844972137575,
+          "learning_rate": 0.039709639853273374,
+          "subsample": 0.7716370453797103,
+          "colsample_bytree": 0.8409593231182007,
+          "reg_alpha": 0.06837123175367252,
+          "reg_lambda": 3.0897822092688774,
           "tree_method": "hist",
           "n_jobs": -1,
-          "early_stopping_rounds": 155
+          "early_stopping_rounds": 47
+        }
+      }
+    },
+    {
+      "outer_fold": 2,
+      "model": "NeuralNetwork",
+      "params": {
+        "loss": "mean_squared_error",
+        "optimizer": "rmsprop",
+        "n_layers": 3,
+        "units_layer_1": 95,
+        "units_layer_2": 216,
+        "units_layer_3": 228,
+        "units_layer_4": 134,
+        "activation": "tanh",
+        "learning_rate": 0.0004910885992721976,
+        "momentum": 0.6598834038508224,
+        "weight_decay": 5.71934210757266e-05
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 3,
+      "model": "LinearRegression",
+      "params": {},
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 3,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 20
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 3,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 20
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
+        }
+      }
+    },
+    {
+      "outer_fold": 3,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 20
+      },
+      "residual_cfg": {
+        "kind": "Huber",
+        "params": {
+          "epsilon": 1.35
+        }
+      }
+    },
+    {
+      "outer_fold": 3,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 20
+      },
+      "residual_cfg": {
+        "kind": "PseudoHuber",
+        "params": {
+          "n_estimators": 200,
+          "max_depth": 2,
+          "learning_rate": 0.05,
+          "subsample": 0.8,
+          "colsample_bytree": 0.8,
+          "reg_alpha": 0.1,
+          "reg_lambda": 1.0,
+          "tree_method": "hist",
+          "n_jobs": -1
+        }
+      }
+    },
+    {
+      "outer_fold": 3,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 3,
+        "n_estimators": 1423,
+        "max_samples": null,
+        "min_samples_leaf": 2,
+        "max_features": 0.5,
+        "max_depth": 19,
+        "bootstrap": false
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 3,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 3,
+        "n_estimators": 1423,
+        "max_samples": null,
+        "min_samples_leaf": 2,
+        "max_features": 0.5,
+        "max_depth": 19,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
+        }
+      }
+    },
+    {
+      "outer_fold": 3,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 7,
+        "n_estimators": 965,
+        "max_samples": 0.7705221747030164,
+        "min_samples_leaf": 3,
+        "max_features": "log2",
+        "max_depth": 23,
+        "bootstrap": true
+      },
+      "residual_cfg": {
+        "kind": "Huber",
+        "params": {
+          "epsilon": 1.1730997110816834,
+          "alpha": 4.0672426190005196e-05
+        }
+      }
+    },
+    {
+      "outer_fold": 3,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 31,
+        "n_estimators": 1841,
+        "max_samples": null,
+        "min_samples_leaf": 4,
+        "max_features": "log2",
+        "max_depth": 35,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "PseudoHuber",
+        "params": {
+          "n_estimators": 414,
+          "max_depth": 2,
+          "learning_rate": 0.05069506172752744,
+          "subsample": 0.8943373865776301,
+          "colsample_bytree": 0.8081185055462541,
+          "reg_alpha": 0.0023795936590879827,
+          "reg_lambda": 1.9680453798817947,
+          "tree_method": "hist",
+          "n_jobs": -1,
+          "early_stopping_rounds": 100
+        }
+      }
+    },
+    {
+      "outer_fold": 3,
+      "model": "SVR",
+      "params": {
+        "kernel": "rbf",
+        "C": 10,
+        "gamma": 0.9329205070920792,
+        "epsilon": 0.051506305403452995
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 3,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 937,
+        "max_depth": 7,
+        "min_child_weight": 5,
+        "learning_rate": 0.10417381757346107,
+        "subsample": 0.8874775029607236,
+        "colsample_bytree": 0.75613035004181,
+        "reg_alpha": 0.49411382886669186,
+        "early_stopping_rounds": 194,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 3,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 937,
+        "max_depth": 7,
+        "min_child_weight": 5,
+        "learning_rate": 0.10417381757346107,
+        "subsample": 0.8874775029607236,
+        "colsample_bytree": 0.75613035004181,
+        "reg_alpha": 0.49411382886669186,
+        "early_stopping_rounds": 194,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
         }
       }
     },
@@ -147,20 +778,18 @@
         "n_estimators": 1494,
         "max_depth": 6,
         "min_child_weight": 8,
-        "learning_rate": 0.18009278134550377,
+        "learning_rate": 0.18009278134550383,
         "subsample": 0.8715162832174448,
         "colsample_bytree": 0.9023466399957516,
         "reg_alpha": 0.07951313609523296,
         "early_stopping_rounds": 48,
-        "residual__Huber__epsilon": 2.3232421176633777,
-        "residual__Huber__alpha": 0.07948148522032548,
         "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
       },
       "residual_cfg": {
         "kind": "Huber",
         "params": {
           "epsilon": 2.3232421176633777,
-          "alpha": 0.07948148522032548
+          "alpha": 0.07948148522032553
         }
       }
     },
@@ -176,16 +805,8 @@
         "learning_rate": 0.10417381757346107,
         "subsample": 0.8874775029607236,
         "colsample_bytree": 0.75613035004181,
-        "reg_alpha": 0.4941138288666923,
+        "reg_alpha": 0.49411382886669186,
         "early_stopping_rounds": 194,
-        "residual__PseudoHuber__n_estimators": 911,
-        "residual__PseudoHuber__max_depth": 4,
-        "residual__PseudoHuber__learning_rate": 0.0565491425763264,
-        "residual__PseudoHuber__subsample": 0.7478297241808147,
-        "residual__PseudoHuber__colsample_bytree": 0.9646484235326755,
-        "residual__PseudoHuber__reg_alpha": 0.7948148522032543,
-        "residual__PseudoHuber__reg_lambda": 3.352491934684075,
-        "residual__PseudoHuber__early_stopping_rounds": 158,
         "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
       },
       "residual_cfg": {
@@ -196,11 +817,234 @@
           "learning_rate": 0.0565491425763264,
           "subsample": 0.7478297241808147,
           "colsample_bytree": 0.9646484235326755,
-          "reg_alpha": 0.7948148522032543,
+          "reg_alpha": 0.7948148522032547,
           "reg_lambda": 3.352491934684075,
           "tree_method": "hist",
           "n_jobs": -1,
           "early_stopping_rounds": 158
+        }
+      }
+    },
+    {
+      "outer_fold": 3,
+      "model": "NeuralNetwork",
+      "params": {
+        "loss": "mean_squared_error",
+        "optimizer": "adam",
+        "n_layers": 4,
+        "units_layer_1": 142,
+        "units_layer_2": 188,
+        "units_layer_3": 83,
+        "units_layer_4": 242,
+        "activation": "relu",
+        "learning_rate": 0.00034975597716000253,
+        "momentum": 0.49314176044638103,
+        "weight_decay": 8.777561191643668e-05
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 4,
+      "model": "LinearRegression",
+      "params": {},
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 4,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 18
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 4,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 18
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
+        }
+      }
+    },
+    {
+      "outer_fold": 4,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 18
+      },
+      "residual_cfg": {
+        "kind": "Huber",
+        "params": {
+          "epsilon": 1.35
+        }
+      }
+    },
+    {
+      "outer_fold": 4,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 18
+      },
+      "residual_cfg": {
+        "kind": "PseudoHuber",
+        "params": {
+          "n_estimators": 200,
+          "max_depth": 2,
+          "learning_rate": 0.05,
+          "subsample": 0.8,
+          "colsample_bytree": 0.8,
+          "reg_alpha": 0.1,
+          "reg_lambda": 1.0,
+          "tree_method": "hist",
+          "n_jobs": -1
+        }
+      }
+    },
+    {
+      "outer_fold": 4,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 27,
+        "n_estimators": 271,
+        "max_samples": null,
+        "min_samples_leaf": 8,
+        "max_features": 0.5,
+        "max_depth": 37,
+        "bootstrap": false
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 4,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 27,
+        "n_estimators": 271,
+        "max_samples": null,
+        "min_samples_leaf": 8,
+        "max_features": 0.5,
+        "max_depth": 37,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
+        }
+      }
+    },
+    {
+      "outer_fold": 4,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 27,
+        "n_estimators": 271,
+        "max_samples": null,
+        "min_samples_leaf": 8,
+        "max_features": 0.5,
+        "max_depth": 37,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "Huber",
+        "params": {
+          "epsilon": 1.1333799890799285,
+          "alpha": 0.003968483313757098
+        }
+      }
+    },
+    {
+      "outer_fold": 4,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 22,
+        "n_estimators": 1747,
+        "max_samples": null,
+        "min_samples_leaf": 4,
+        "max_features": 0.3,
+        "max_depth": 23,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "PseudoHuber",
+        "params": {
+          "n_estimators": 928,
+          "max_depth": 3,
+          "learning_rate": 0.07151216858893174,
+          "subsample": 0.7876753924918398,
+          "colsample_bytree": 0.8056332702268033,
+          "reg_alpha": 0.001724976696936649,
+          "reg_lambda": 3.756087429338501,
+          "tree_method": "hist",
+          "n_jobs": -1,
+          "early_stopping_rounds": 49
+        }
+      }
+    },
+    {
+      "outer_fold": 4,
+      "model": "SVR",
+      "params": {
+        "kernel": "rbf",
+        "C": 10,
+        "gamma": 0.6491152440310317,
+        "epsilon": 0.016212011977193894
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 4,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 1028,
+        "max_depth": 10,
+        "min_child_weight": 1,
+        "learning_rate": 0.06658870702907414,
+        "subsample": 0.7064749396201832,
+        "colsample_bytree": 0.9665755228360087,
+        "reg_alpha": 0.000434136298583134,
+        "early_stopping_rounds": 32,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 4,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 1028,
+        "max_depth": 10,
+        "min_child_weight": 1,
+        "learning_rate": 0.06658870702907414,
+        "subsample": 0.7064749396201832,
+        "colsample_bytree": 0.9665755228360087,
+        "reg_alpha": 0.000434136298583134,
+        "early_stopping_rounds": 32,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
         }
       }
     },
@@ -215,11 +1059,9 @@
         "min_child_weight": 4,
         "learning_rate": 0.06772558370479087,
         "subsample": 0.9525818712634214,
-        "colsample_bytree": 0.680936323601529,
+        "colsample_bytree": 0.6809363236015291,
         "reg_alpha": 0.09736227807888459,
         "early_stopping_rounds": 96,
-        "residual__Huber__epsilon": 1.301440549779588,
-        "residual__Huber__alpha": 4.451890251871098e-05,
         "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
       },
       "residual_cfg": {
@@ -242,16 +1084,8 @@
         "learning_rate": 0.06658870702907414,
         "subsample": 0.7064749396201832,
         "colsample_bytree": 0.9665755228360087,
-        "reg_alpha": 0.00043413629858313365,
+        "reg_alpha": 0.000434136298583134,
         "early_stopping_rounds": 32,
-        "residual__PseudoHuber__n_estimators": 905,
-        "residual__PseudoHuber__max_depth": 2,
-        "residual__PseudoHuber__learning_rate": 0.047424776949686664,
-        "residual__PseudoHuber__subsample": 0.7712022915105604,
-        "residual__PseudoHuber__colsample_bytree": 0.9378204965000664,
-        "residual__PseudoHuber__reg_alpha": 0.0024065483990050656,
-        "residual__PseudoHuber__reg_lambda": 4.792943372442137,
-        "residual__PseudoHuber__early_stopping_rounds": 128,
         "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
       },
       "residual_cfg": {
@@ -271,28 +1105,249 @@
       }
     },
     {
+      "outer_fold": 4,
+      "model": "NeuralNetwork",
+      "params": {
+        "loss": "mean_squared_error",
+        "optimizer": "rmsprop",
+        "n_layers": 3,
+        "units_layer_1": 127,
+        "units_layer_2": 77,
+        "units_layer_3": 68,
+        "units_layer_4": 141,
+        "activation": "tanh",
+        "learning_rate": 0.0003049465026756028,
+        "momentum": 0.8897360597814087,
+        "weight_decay": 0.00018370912237620568
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 5,
+      "model": "LinearRegression",
+      "params": {},
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 5,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 14
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 5,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 14
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
+        }
+      }
+    },
+    {
+      "outer_fold": 5,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 14
+      },
+      "residual_cfg": {
+        "kind": "Huber",
+        "params": {
+          "epsilon": 1.35
+        }
+      }
+    },
+    {
+      "outer_fold": 5,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 20
+      },
+      "residual_cfg": {
+        "kind": "PseudoHuber",
+        "params": {
+          "n_estimators": 200,
+          "max_depth": 2,
+          "learning_rate": 0.05,
+          "subsample": 0.8,
+          "colsample_bytree": 0.8,
+          "reg_alpha": 0.1,
+          "reg_lambda": 1.0,
+          "tree_method": "hist",
+          "n_jobs": -1
+        }
+      }
+    },
+    {
+      "outer_fold": 5,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 28,
+        "n_estimators": 326,
+        "max_samples": null,
+        "min_samples_leaf": 3,
+        "max_features": 0.8,
+        "max_depth": 23,
+        "bootstrap": false
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 5,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 28,
+        "n_estimators": 326,
+        "max_samples": null,
+        "min_samples_leaf": 3,
+        "max_features": 0.8,
+        "max_depth": 23,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
+        }
+      }
+    },
+    {
+      "outer_fold": 5,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 5,
+        "n_estimators": 493,
+        "max_samples": null,
+        "min_samples_leaf": 7,
+        "max_features": "log2",
+        "max_depth": 29,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "Huber",
+        "params": {
+          "epsilon": 2.2575439291645587,
+          "alpha": 0.009597561473716524
+        }
+      }
+    },
+    {
+      "outer_fold": 5,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "min_samples_split": 33,
+        "n_estimators": 332,
+        "max_samples": null,
+        "min_samples_leaf": 3,
+        "max_features": 0.3,
+        "max_depth": 22,
+        "bootstrap": false
+      },
+      "residual_cfg": {
+        "kind": "PseudoHuber",
+        "params": {
+          "n_estimators": 1076,
+          "max_depth": 4,
+          "learning_rate": 0.05877395423419107,
+          "subsample": 0.7853179905601978,
+          "colsample_bytree": 0.9264824835198825,
+          "reg_alpha": 0.16440293181620194,
+          "reg_lambda": 1.567811207747603,
+          "tree_method": "hist",
+          "n_jobs": -1,
+          "early_stopping_rounds": 54
+        }
+      }
+    },
+    {
+      "outer_fold": 5,
+      "model": "SVR",
+      "params": {
+        "kernel": "rbf",
+        "C": 20,
+        "gamma": 0.9954784429306798,
+        "epsilon": 0.04370922625099629
+      },
+      "residual_cfg": null
+    },
+    {
       "outer_fold": 5,
       "model": "XGBoost",
       "params": {
         "tree_method": "hist",
         "n_jobs": -1,
-        "n_estimators": 1679,
-        "max_depth": 4,
-        "min_child_weight": 2,
-        "learning_rate": 0.1597053763204502,
-        "subsample": 0.9141480351076746,
-        "colsample_bytree": 0.8129280808986465,
-        "reg_alpha": 0.00022454020680278734,
-        "early_stopping_rounds": 134,
-        "residual__Huber__epsilon": 1.2828438928557722,
-        "residual__Huber__alpha": 0.0006306551903568626,
+        "n_estimators": 1783,
+        "max_depth": 8,
+        "min_child_weight": 9,
+        "learning_rate": 0.049156555136512174,
+        "subsample": 0.9034291259316873,
+        "colsample_bytree": 0.9080345187786826,
+        "reg_alpha": 0.034860817033637,
+        "early_stopping_rounds": 115,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
+      },
+      "residual_cfg": null
+    },
+    {
+      "outer_fold": 5,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 1783,
+        "max_depth": 8,
+        "min_child_weight": 9,
+        "learning_rate": 0.049156555136512174,
+        "subsample": 0.9034291259316873,
+        "colsample_bytree": 0.9080345187786826,
+        "reg_alpha": 0.034860817033637,
+        "early_stopping_rounds": 115,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
+      },
+      "residual_cfg": {
+        "kind": "ElasticNet",
+        "params": {
+          "alpha": 0.001,
+          "l1_ratio": 0.5
+        }
+      }
+    },
+    {
+      "outer_fold": 5,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 1046,
+        "max_depth": 8,
+        "min_child_weight": 1,
+        "learning_rate": 0.09295048544870757,
+        "subsample": 0.8346453081482116,
+        "colsample_bytree": 0.6030146375497966,
+        "reg_alpha": 0.005751835651659526,
+        "early_stopping_rounds": 67,
         "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
       },
       "residual_cfg": {
         "kind": "Huber",
         "params": {
-          "epsilon": 1.2828438928557722,
-          "alpha": 0.0006306551903568626
+          "epsilon": 1.9324841068050584,
+          "alpha": 3.267428642160511e-05
         }
       }
     },
@@ -310,14 +1365,6 @@
         "colsample_bytree": 0.8697447661262617,
         "reg_alpha": 0.02146463921101267,
         "early_stopping_rounds": 185,
-        "residual__PseudoHuber__n_estimators": 857,
-        "residual__PseudoHuber__max_depth": 3,
-        "residual__PseudoHuber__learning_rate": 0.04008796232001188,
-        "residual__PseudoHuber__subsample": 0.7958816619557233,
-        "residual__PseudoHuber__colsample_bytree": 0.9830462321599084,
-        "residual__PseudoHuber__reg_alpha": 0.007729615770483791,
-        "residual__PseudoHuber__reg_lambda": 2.2679572296813912,
-        "residual__PseudoHuber__early_stopping_rounds": 51,
         "monotone_constraints": "(1,-1,0,0,1,0,0,0)"
       },
       "residual_cfg": {
@@ -326,8 +1373,8 @@
           "n_estimators": 857,
           "max_depth": 3,
           "learning_rate": 0.04008796232001188,
-          "subsample": 0.7958816619557233,
-          "colsample_bytree": 0.9830462321599084,
+          "subsample": 0.7958816619557232,
+          "colsample_bytree": 0.9830462321599085,
           "reg_alpha": 0.007729615770483791,
           "reg_lambda": 2.2679572296813912,
           "tree_method": "hist",
@@ -335,6 +1382,24 @@
           "early_stopping_rounds": 51
         }
       }
+    },
+    {
+      "outer_fold": 5,
+      "model": "NeuralNetwork",
+      "params": {
+        "loss": "mean_squared_error",
+        "optimizer": "adamW",
+        "n_layers": 4,
+        "units_layer_1": 157,
+        "units_layer_2": 165,
+        "units_layer_3": 198,
+        "units_layer_4": 216,
+        "activation": "gelu",
+        "learning_rate": 0.0004003393924146675,
+        "momentum": 0.06329650146441866,
+        "weight_decay": 3.084689352070975e-06
+      },
+      "residual_cfg": null
     }
   ]
 }

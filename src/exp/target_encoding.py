@@ -31,28 +31,27 @@ class LeakageSafeTargetEncoder(BaseEstimator, TransformerMixin):
         self.mapping_: Dict[str, Dict[Any, float]] = {}
 
     def fit(self, X: pd.DataFrame, y):
-        X = pd.DataFrame(X, copy=False)
-        y = np.asarray(y, dtype=float)
-        y_series = pd.Series(y, index=X.index)
+        X = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+        y = np.asarray(y).astype(float)
         self.global_mean_ = float(np.mean(y))
+        
+        # Optimization: Align y once as a Series to avoid creating DataFrames inside the loop
+        y_series = pd.Series(y, index=X.index)
 
         self.mapping_.clear()
         for c in self.cols:
-            s = X[c]
-
-            # group stats without a temporary DataFrame per column
-            stats = y_series.groupby(s).agg(["count", "mean"])
+            stats = y_series.groupby(X[c]).agg(["count", "mean"])
 
             # smoothing:
             # enc = (count*mean + smoothing*global) / (count + smoothing)
-            cnt = stats["count"].to_numpy(dtype=float, copy=False)
-            mu = stats["mean"].to_numpy(dtype=float, copy=False)
+            cnt = stats["count"].astype(float)
+            mu = stats["mean"].astype(float)
 
             # optional: enforce min_samples_leaf by increasing shrinkage for tiny counts
             eff_cnt = np.maximum(cnt, self.min_samples_leaf)
 
             enc = (eff_cnt * mu + self.smoothing * self.global_mean_) / (eff_cnt + self.smoothing)
-            self.mapping_[c] = dict(zip(stats.index.tolist(), enc.tolist()))
+            self.mapping_[c] = enc.to_dict()
 
         return self
 
@@ -60,7 +59,6 @@ class LeakageSafeTargetEncoder(BaseEstimator, TransformerMixin):
         X = X.copy()
         if self.noise_std > 0:
             rng = np.random.default_rng(self.random_state)
-        cols_to_drop = []
         for col in self.cols:
             enc = X[col].map(self.mapping_[col])
             # Ensure numeric dtype before fillna to avoid categorical setitem errors.
@@ -69,30 +67,8 @@ class LeakageSafeTargetEncoder(BaseEstimator, TransformerMixin):
             if self.noise_std > 0:
                 enc = enc + rng.normal(0.0, self.noise_std, size=len(enc))
             X[f"{col}__te"] = enc.astype(self.output_dtype)
-            cols_to_drop.append(col)
-        if cols_to_drop:
-            X.drop(columns=cols_to_drop, inplace=True)
+            X.drop(columns=[col], inplace=True)
         return X
 
     def get_feature_names_out(self, input_features=None):
         return np.array([f"{col}__te" for col in self.cols], dtype=object)
-
-
-class TargetEncoderFactory:
-    @staticmethod
-    def create(
-        cols: List[str],
-        smoothing: float = 10.0,
-        min_samples_leaf: int = 1,
-        noise_std: float = 0.0,
-        random_state: int = 42,
-        output_dtype: str = "float64",
-    ) -> LeakageSafeTargetEncoder:
-        return LeakageSafeTargetEncoder(
-            cols=cols,
-            smoothing=smoothing,
-            min_samples_leaf=min_samples_leaf,
-            noise_std=noise_std,
-            random_state=random_state,
-            output_dtype=output_dtype,
-        )

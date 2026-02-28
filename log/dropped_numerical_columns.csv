@@ -1,0 +1,6 @@
+run_id,timestamp_utc,outer_fold,inner_fold,model_name,trial_id,column_name,error_type
+6860213c-6601-4cd4-a00a-9ced5ef9def9,2026-02-04T07:10:26.429818+00:00,1,1,DecisionTree,0,year,BracketError
+6860213c-6601-4cd4-a00a-9ced5ef9def9,2026-02-04T07:10:28.830816+00:00,1,2,DecisionTree,0,year,BracketError
+6860213c-6601-4cd4-a00a-9ced5ef9def9,2026-02-04T07:10:31.210182+00:00,1,3,DecisionTree,0,year,BracketError
+6860213c-6601-4cd4-a00a-9ced5ef9def9,2026-02-04T07:10:33.565775+00:00,1,4,DecisionTree,0,year,BracketError
+6860213c-6601-4cd4-a00a-9ced5ef9def9,2026-02-04T07:10:35.835907+00:00,1,5,DecisionTree,0,year,BracketError

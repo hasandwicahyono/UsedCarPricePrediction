@@ -55,6 +55,7 @@ def read_csv_folder(cfg: DataReadConfig) -> pd.DataFrame:
 
     # file discovery
     glob_method = root.rglob if cfg.recursive else root.glob
+    # Filter first, then sort (reduces sorting complexity)
     files = sorted(p for p in glob_method(cfg.pattern) if p.is_file() and p.name not in exclude)
 
     if not files:
@@ -73,12 +74,11 @@ def read_csv_folder(cfg: DataReadConfig) -> pd.DataFrame:
         df = pd.read_csv(p, **read_kwargs)
 
         # Rename the 'tax(£)' column to 'tax' if it exists.
-        if 'tax(£)' in df.columns:
-            df.rename(columns={'tax(£)': 'tax'}, inplace=True)
+        df.rename(columns={'tax(£)': 'tax'}, inplace=True)
         
         df = _normalize_columns(df, cfg)
         if cfg.add_source_column:
-            df[cfg.source_column_name] = str(p.as_posix())
+            df[cfg.source_column_name] = p.as_posix()
         frames.append(df)
 
     out = pd.concat(frames, axis=0, ignore_index=True, sort=False)
@@ -104,16 +104,18 @@ def coerce_dtypes(
     - numeric cols -> to_numeric
     - categorical cols -> astype('category') (optional)
     """
-    valid_numeric = [c for c in (numeric_cols or []) if c in df.columns]
-    valid_categorical = [c for c in (categorical_cols or []) if c in df.columns]
-    if not valid_numeric and not valid_categorical:
-        return df.copy()
-
     df = df.copy()
-    if valid_numeric:
-        df[valid_numeric] = df[valid_numeric].apply(pd.to_numeric, errors=errors)
-    if valid_categorical:
-        df[valid_categorical] = df[valid_categorical].astype("category")
+
+    if numeric_cols:
+        # Filter valid columns first to avoid nested checks
+        valid_numeric = [c for c in numeric_cols if c in df.columns]
+        for c in valid_numeric:
+            df[c] = pd.to_numeric(df[c], errors=errors)
+
+    if categorical_cols:
+        valid_categorical = [c for c in categorical_cols if c in df.columns]
+        for c in valid_categorical:
+            df[c] = df[c].astype("category")
 
     return df
 

@@ -55,7 +55,6 @@ class ExperimentConfig:
         "DecisionTree": [
             {"kind": "None", "params": {}},
             {"kind": "ElasticNet", "params": {"alpha": 0.001, "l1_ratio": 0.5}},
-            #{"kind": "Quantile", "params": {"quantile": 0.75, "alpha": 0.001}},
             {"kind": "Huber", "params": {"epsilon": 1.35}},
             {
                 "kind": "PseudoHuber",
@@ -75,7 +74,6 @@ class ExperimentConfig:
         "RandomForest": [
             {"kind": "None", "params": {}},
             {"kind": "ElasticNet", "params": {"alpha": 0.001, "l1_ratio": 0.5}},
-            #{"kind": "Quantile", "params": {"quantile": 0.75, "alpha": 0.001}},
             {"kind": "Huber", "params": {"epsilon": 1.35}},
             {
                 "kind": "PseudoHuber",
@@ -93,6 +91,8 @@ class ExperimentConfig:
             },
         ],
         "XGBoost": [
+            {"kind": "None", "params": {}},
+            {"kind": "ElasticNet", "params": {"alpha": 0.001, "l1_ratio": 0.5}},
             {"kind": "Huber", "params": {"epsilon": 1.35}},
             {
                 "kind": "PseudoHuber",

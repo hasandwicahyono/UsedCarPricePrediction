@@ -1,0 +1,360 @@
+{
+  "meta": {
+    "outer_folds": 5,
+    "inner_folds": 5,
+    "n_trials": 40,
+    "log_target": true
+  },
+  "best_params": [
+    {
+      "outer_fold": 1,
+      "model": "LinearRegression",
+      "params": {}
+    },
+    {
+      "outer_fold": 1,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 15
+      }
+    },
+    {
+      "outer_fold": 1,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "max_depth": null,
+        "min_samples_split": 18,
+        "n_estimators": 211,
+        "max_samples": 0.7246272003977223,
+        "min_samples_leaf": 2,
+        "max_features": 0.7
+      }
+    },
+    {
+      "outer_fold": 1,
+      "model": "SVR",
+      "params": {
+        "kernel": "rbf",
+        "C": 20,
+        "gamma": 0.3972776779516004,
+        "epsilon": 0.13272305141483834
+      }
+    },
+    {
+      "outer_fold": 1,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 1523,
+        "max_depth": 8,
+        "min_child_weight": 2,
+        "learning_rate": 0.13267397102720105,
+        "subsample": 0.7805715824943998,
+        "colsample_bytree": 0.8598918813785943,
+        "reg_alpha": 0.0006264119483661832,
+        "early_stopping_rounds": 93,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)"
+      }
+    },
+    {
+      "outer_fold": 1,
+      "model": "NeuralNetwork",
+      "params": {
+        "loss": "mean_squared_error",
+        "optimizer": "adam",
+        "n_layers": 1,
+        "units_layer_1": 168,
+        "units_layer_2": 37,
+        "units_layer_3": 65,
+        "units_layer_4": 248,
+        "activation": "tanh",
+        "learning_rate": 0.002897551943826018,
+        "momentum": 0.945411344427829,
+        "weight_decay": 1.3100642005475248e-05
+      }
+    },
+    {
+      "outer_fold": 2,
+      "model": "LinearRegression",
+      "params": {}
+    },
+    {
+      "outer_fold": 2,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 26
+      }
+    },
+    {
+      "outer_fold": 2,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "max_depth": null,
+        "min_samples_split": 26,
+        "n_estimators": 303,
+        "max_samples": 0.7882739957373228,
+        "min_samples_leaf": 3,
+        "max_features": 0.3
+      }
+    },
+    {
+      "outer_fold": 2,
+      "model": "SVR",
+      "params": {
+        "kernel": "rbf",
+        "C": 20,
+        "gamma": 0.8573009765401174,
+        "epsilon": 0.20436862209386972
+      }
+    },
+    {
+      "outer_fold": 2,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 1756,
+        "max_depth": 9,
+        "min_child_weight": 3,
+        "learning_rate": 0.07340040138908033,
+        "subsample": 0.7452488687923806,
+        "colsample_bytree": 0.6410523423180756,
+        "reg_alpha": 0.011839517563962265,
+        "early_stopping_rounds": 196,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)"
+      }
+    },
+    {
+      "outer_fold": 2,
+      "model": "NeuralNetwork",
+      "params": {
+        "loss": "mean_squared_error",
+        "optimizer": "rmsprop",
+        "n_layers": 3,
+        "units_layer_1": 95,
+        "units_layer_2": 216,
+        "units_layer_3": 228,
+        "units_layer_4": 134,
+        "activation": "tanh",
+        "learning_rate": 0.0004910885992721976,
+        "momentum": 0.6598834038508224,
+        "weight_decay": 5.71934210757266e-05
+      }
+    },
+    {
+      "outer_fold": 3,
+      "model": "LinearRegression",
+      "params": {}
+    },
+    {
+      "outer_fold": 3,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 23
+      }
+    },
+    {
+      "outer_fold": 3,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "max_depth": null,
+        "min_samples_split": 9,
+        "n_estimators": 244,
+        "max_samples": 0.8432101452351637,
+        "min_samples_leaf": 3,
+        "max_features": 0.7
+      }
+    },
+    {
+      "outer_fold": 3,
+      "model": "SVR",
+      "params": {
+        "kernel": "rbf",
+        "C": 10,
+        "gamma": 0.9899663049125815,
+        "epsilon": 0.18874787372486718
+      }
+    },
+    {
+      "outer_fold": 3,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 937,
+        "max_depth": 7,
+        "min_child_weight": 5,
+        "learning_rate": 0.10417381757346107,
+        "subsample": 0.8874775029607236,
+        "colsample_bytree": 0.75613035004181,
+        "reg_alpha": 0.49411382886669186,
+        "early_stopping_rounds": 194,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)"
+      }
+    },
+    {
+      "outer_fold": 3,
+      "model": "NeuralNetwork",
+      "params": {
+        "loss": "mean_squared_error",
+        "optimizer": "adam",
+        "n_layers": 2,
+        "units_layer_1": 225,
+        "units_layer_2": 103,
+        "units_layer_3": 191,
+        "units_layer_4": 68,
+        "activation": "gelu",
+        "learning_rate": 0.003073130860319844,
+        "momentum": 0.929991362556881,
+        "weight_decay": 0.0008191310143929135
+      }
+    },
+    {
+      "outer_fold": 4,
+      "model": "LinearRegression",
+      "params": {}
+    },
+    {
+      "outer_fold": 4,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 17
+      }
+    },
+    {
+      "outer_fold": 4,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "max_depth": null,
+        "min_samples_split": 25,
+        "n_estimators": 1831,
+        "max_samples": 0.631475537388014,
+        "min_samples_leaf": 3,
+        "max_features": 0.8
+      }
+    },
+    {
+      "outer_fold": 4,
+      "model": "SVR",
+      "params": {
+        "kernel": "rbf",
+        "C": 10,
+        "gamma": 0.8056768856253924,
+        "epsilon": 0.12732639937261203
+      }
+    },
+    {
+      "outer_fold": 4,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 1028,
+        "max_depth": 10,
+        "min_child_weight": 1,
+        "learning_rate": 0.06658870702907414,
+        "subsample": 0.7064749396201832,
+        "colsample_bytree": 0.9665755228360087,
+        "reg_alpha": 0.000434136298583134,
+        "early_stopping_rounds": 32,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)"
+      }
+    },
+    {
+      "outer_fold": 4,
+      "model": "NeuralNetwork",
+      "params": {
+        "loss": "mean_squared_error",
+        "optimizer": "rmsprop",
+        "n_layers": 3,
+        "units_layer_1": 127,
+        "units_layer_2": 77,
+        "units_layer_3": 68,
+        "units_layer_4": 141,
+        "activation": "tanh",
+        "learning_rate": 0.0003049465026756028,
+        "momentum": 0.8897360597814087,
+        "weight_decay": 0.00018370912237620568
+      }
+    },
+    {
+      "outer_fold": 5,
+      "model": "LinearRegression",
+      "params": {}
+    },
+    {
+      "outer_fold": 5,
+      "model": "DecisionTree",
+      "params": {
+        "max_depth": null,
+        "min_samples_split": 33
+      }
+    },
+    {
+      "outer_fold": 5,
+      "model": "RandomForest",
+      "params": {
+        "n_jobs": -1,
+        "max_depth": null,
+        "min_samples_split": 30,
+        "n_estimators": 1516,
+        "max_samples": 0.6903642488579852,
+        "min_samples_leaf": 2,
+        "max_features": 0.8
+      }
+    },
+    {
+      "outer_fold": 5,
+      "model": "SVR",
+      "params": {
+        "kernel": "rbf",
+        "C": 10,
+        "gamma": 0.20376662511328944,
+        "epsilon": 0.12874304751322083
+      }
+    },
+    {
+      "outer_fold": 5,
+      "model": "XGBoost",
+      "params": {
+        "tree_method": "hist",
+        "n_jobs": -1,
+        "n_estimators": 1132,
+        "max_depth": 8,
+        "min_child_weight": 3,
+        "learning_rate": 0.16384287108299683,
+        "subsample": 0.9285057161769404,
+        "colsample_bytree": 0.6806099820389327,
+        "reg_alpha": 0.0007394707854694507,
+        "early_stopping_rounds": 187,
+        "monotone_constraints": "(1,-1,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)"
+      }
+    },
+    {
+      "outer_fold": 5,
+      "model": "NeuralNetwork",
+      "params": {
+        "loss": "mean_squared_error",
+        "optimizer": "adamW",
+        "n_layers": 4,
+        "units_layer_1": 157,
+        "units_layer_2": 165,
+        "units_layer_3": 198,
+        "units_layer_4": 216,
+        "activation": "gelu",
+        "learning_rate": 0.0004003393924146675,
+        "momentum": 0.06329650146441866,
+        "weight_decay": 3.084689352070975e-06
+      }
+    }
+  ]
+}

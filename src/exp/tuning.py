@@ -8,15 +8,16 @@ import numpy as np
 import pandas as pd
 import optuna
 from sklearn.model_selection import KFold
-from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error, median_absolute_error
 
 from .config import ExperimentConfig, FeatureSchema
 from .metrics import MetricStrategy
+from .registry import METRIC_REGISTRY
 from .factories import (
     build_metric,
     build_model,
     build_preprocessor,
     get_preprocess_policy,
+    get_interaction_policy,
     #get_model_names,
 )
 from .schema_utils import sanitize_columns, infer_schema
@@ -24,6 +25,7 @@ from .utils import build_monotone_constraints, make_pre_cache_key, model_label, 
 from .policies import DEFAULT_PREPROCESS_POLICY
 from .specs import PreprocessSpec
 from .patterns import RunContext, SplitStrategy, TuningObserver
+from .interaction_features import add_interaction_features
 
 # ======================================================
 # Utilities
@@ -55,17 +57,21 @@ def ensure_numeric_matrix(Xtr, Xva=None):
     Ensure X matrices are numeric for models like XGBoost.
     If object dtypes are found, fall back to pandas.get_dummies and align columns.
     """
+    if hasattr(Xtr, "dtype") and Xtr.dtype != object:
+        return Xtr, Xva
     if isinstance(Xtr, pd.DataFrame):
-        # Fast path: avoid costly one-hot fallback when already numeric.
+        # Fast path: fully numeric DataFrame does not need expensive get_dummies.
         if all(pd.api.types.is_numeric_dtype(dt) for dt in Xtr.dtypes):
             Xtr_num = Xtr.to_numpy()
             if Xva is None:
                 return Xtr_num, None
             if isinstance(Xva, pd.DataFrame):
+                # Keep deterministic alignment in case validation columns differ/order shifts.
                 Xva_num = Xva.reindex(columns=Xtr.columns, fill_value=0).to_numpy()
             else:
                 Xva_num = np.asarray(Xva)
             return Xtr_num, Xva_num
+
         Xtr_d = pd.get_dummies(Xtr, drop_first=False)
         if Xva is not None:
             Xva_d = pd.get_dummies(Xva, drop_first=False)
@@ -73,8 +79,6 @@ def ensure_numeric_matrix(Xtr, Xva=None):
         else:
             Xva_d = None
         return Xtr_d.to_numpy(), None if Xva_d is None else Xva_d.to_numpy()
-    if isinstance(Xtr, np.ndarray) and Xtr.dtype != object:
-        return Xtr, Xva
     # fallback: try to coerce numpy object array into DataFrame then dummies
     Xtr_df = pd.DataFrame(Xtr)
     Xtr_d = pd.get_dummies(Xtr_df, drop_first=False)
@@ -371,6 +375,7 @@ class NestedCVRunner:
         trial: optuna.Trial,
         model_name: str,
         policy: Dict[str, Any],
+        interaction_policy: str,
         fixed: Dict[str, Any],
         search: Dict[str, Any],
         fixed_r: Dict[str, Any],
@@ -423,22 +428,48 @@ class NestedCVRunner:
             if self.cfg.preprocessing_cache and key in pre_cache:
                 pre, Xtr, Xva = pre_cache[key]
             else:
-                pre = self._preprocessor_factory(
-                    PreprocessSpec(
-                        cat_encoding=policy["cat_encoding"],
-                        use_feature_selection=policy["use_feature_selection"],
-                        seed=seed,
-                        run_id=run_id,
-                        outer_fold=outer_fold,
-                        inner_fold=step,
-                        model_name=model_name,
-                        trial_id=trial.number,
+                Xtr_use = Xtr_raw
+                Xva_use = Xva_raw
+                schema_use = self.schema
+                if interaction_policy != "none":
+                    Xtr_use, add_num, add_cat = add_interaction_features(Xtr_raw, interaction_policy)
+                    Xva_use, _, _ = add_interaction_features(Xva_raw, interaction_policy)
+                    schema_use = FeatureSchema(
+                        target=self.schema.target,
+                        num_cols=self.schema.num_cols + add_num,
+                        cat_cols=self.schema.cat_cols + add_cat,
                     )
-                )
-                Xtr = pre.fit_transform(Xtr_raw, ytr)
-                Xva = pre.transform(Xva_raw)
+                    pre = build_preprocessor(
+                        schema_use,
+                        PreprocessSpec(
+                            cat_encoding=policy["cat_encoding"],
+                            use_feature_selection=policy["use_feature_selection"],
+                            seed=seed,
+                            run_id=run_id,
+                            outer_fold=outer_fold,
+                            inner_fold=step,
+                            model_name=model_name,
+                            trial_id=trial.number,
+                        ),
+                    )
+                else:
+                    pre = self._preprocessor_factory(
+                        PreprocessSpec(
+                            cat_encoding=policy["cat_encoding"],
+                            use_feature_selection=policy["use_feature_selection"],
+                            seed=seed,
+                            run_id=run_id,
+                            outer_fold=outer_fold,
+                            inner_fold=step,
+                            model_name=model_name,
+                            trial_id=trial.number,
+                        )
+                    )
+                Xtr = pre.fit_transform(Xtr_use, ytr)
+                Xva = pre.transform(Xva_use)
                 if model_name == "XGBoost":
                     Xtr, Xva = ensure_numeric_matrix(Xtr, Xva)
+
                 if self.cfg.preprocessing_cache:
                     pre_cache[key] = (pre, Xtr, Xva)
 
@@ -495,6 +526,12 @@ class NestedCVRunner:
         preprocess_policy_by_model = {
             m: get_preprocess_policy(m, default_policy) for m in model_set
         }
+        interaction_policy_by_model = {
+            m: get_interaction_policy(m, "none") for m in model_set
+        }
+        report_metric_objs = [
+            build_metric(k) for k in self.cfg.report_metrics if k in METRIC_REGISTRY
+        ]
         for ofold, (tr, te) in enumerate(
             self.outer_splitter.split(self.X, self.y_log, self.cfg.seed),
             start=1,
@@ -569,6 +606,7 @@ class NestedCVRunner:
                         t,
                         model_name,
                         preprocess_policy_by_model[model_name],
+                        interaction_policy_by_model[model_name],
                         fixed,
                         search,
                         fixed_r,
@@ -594,10 +632,13 @@ class NestedCVRunner:
                     raise RuntimeError(f"No completed trials for model {model_name} in outer fold {ofold}.")
                 
                 best_params = {**fixed, **study.best_params}
+
+                # Filter out residual parameters (they are stored in best_residual_cfg)
                 best_params = {k: v for k, v in best_params.items() if not k.startswith("residual__")}
+
                 if model_name == "RandomForest" and best_params.get("bootstrap") is False:
                     best_params["max_samples"] = None
-
+                
                 best_residual_cfg = study.best_trial.user_attrs.get("residual_cfg")
 
                 self.best_params_records_.append(
@@ -612,21 +653,47 @@ class NestedCVRunner:
 
                 ## --- retrain on full outer train ---
                 policy = preprocess_policy_by_model[model_name]
-                pre = self._preprocessor_factory(
-                    PreprocessSpec(
-                        cat_encoding=policy["cat_encoding"],
-                        use_feature_selection=policy["use_feature_selection"],
-                        seed=fold_seed,
-                        run_id=self.run_id,
-                        outer_fold=ofold,
-                        inner_fold=None,
-                        model_name=model_name,
-                        trial_id=None,
+                Xtr_use = Xtr_raw
+                Xte_use = Xte_raw
+                schema_use = self.schema
+                interaction_policy = interaction_policy_by_model[model_name]
+                if interaction_policy != "none":
+                    Xtr_use, add_num, add_cat = add_interaction_features(Xtr_raw, interaction_policy)
+                    Xte_use, _, _ = add_interaction_features(Xte_raw, interaction_policy)
+                    schema_use = FeatureSchema(
+                        target=self.schema.target,
+                        num_cols=self.schema.num_cols + add_num,
+                        cat_cols=self.schema.cat_cols + add_cat,
                     )
-                )
+                    pre = build_preprocessor(
+                        schema_use,
+                        PreprocessSpec(
+                            cat_encoding=policy["cat_encoding"],
+                            use_feature_selection=policy["use_feature_selection"],
+                            seed=fold_seed,
+                            run_id=self.run_id,
+                            outer_fold=ofold,
+                            inner_fold=None,
+                            model_name=model_name,
+                            trial_id=None,
+                        ),
+                    )
+                else:
+                    pre = self._preprocessor_factory(
+                        PreprocessSpec(
+                            cat_encoding=policy["cat_encoding"],
+                            use_feature_selection=policy["use_feature_selection"],
+                            seed=fold_seed,
+                            run_id=self.run_id,
+                            outer_fold=ofold,
+                            inner_fold=None,
+                            model_name=model_name,
+                            trial_id=None,
+                        )
+                    )
                 
-                Xtr = pre.fit_transform(Xtr_raw, ytr_log)
-                Xte = pre.transform(Xte_raw)
+                Xtr = pre.fit_transform(Xtr_use, ytr_log)
+                Xte = pre.transform(Xte_use)
                 
                 feature_names = pre.get_feature_names_out()
 
@@ -667,18 +734,12 @@ class NestedCVRunner:
                 pred = model.predict(Xte)
                 pred_price = np.exp(pred) if self.cfg.log_target else pred
 
+                # Calculate reporting metrics using the registry
+                scores = {m.name: m.compute(yte_price, pred_price) for m in report_metric_objs}
+
                 label = model_label(model_name, residual_cfg)
-                rows.append(
-                    dict(
-                        outer_fold=ofold,
-                        model=label,
-                        R2=r2_score(yte_price, pred_price),
-                        MAE=mean_absolute_error(yte_price, pred_price),
-                        MedAE=median_absolute_error(yte_price, pred_price),
-                        MSE=mean_squared_error(yte_price, pred_price),
-                        RMSE=np.sqrt(mean_squared_error(yte_price, pred_price)),
-                    )
-                )
+                row = dict(outer_fold=ofold, model=label, **scores)
+                rows.append(row)
 
                 shap_model = model
                 if hasattr(model, "base"):
@@ -699,11 +760,14 @@ class NestedCVRunner:
                 RunContext(run_id=self.run_id, outer_fold=ofold)
             )
 
-        # Keep only keys common across outer folds to prevent unstable aggregation crashes.
+        # Prune unstable hyperparameters (not present in all folds) to prevent aggregation crashes.
+        # This handles cases where residual strategies (and thus params) vary across folds.
         for model_name, params_list in self.best_params_.items():
             if len(params_list) < 2:
                 continue
+            
             common_keys = set(params_list[0]).intersection(*params_list[1:])
+            
             if not common_keys:
                 for p in params_list:
                     p.clear()

@@ -7,6 +7,10 @@ from typing import Callable, Tuple
 import joblib
 import numpy as np
 from tensorflow.keras.models import load_model
+import pandas as pd
+
+from .factories import get_interaction_policy
+from .interaction_features import add_interaction_features
 
 
 def load_best_model_name(artifact_path: str = "outputs/artifacts/best_model.json") -> str:
@@ -47,9 +51,14 @@ def make_predictor(
         model_name = load_best_model_name(artifact_path)
 
     model, pre, is_keras = load_model_artifacts(model_name, model_dir=model_dir)
+    base_model_name = model_name.split("+")[0]
+    interaction_policy = get_interaction_policy(base_model_name, "none")
 
     def predict(X):
-        Xp = pre.transform(X)
+        X_in = X
+        if interaction_policy != "none" and isinstance(X, pd.DataFrame):
+            X_in, _, _ = add_interaction_features(X, interaction_policy)
+        Xp = pre.transform(X_in)
         if is_keras:
             pred = model.predict(Xp, verbose=0).reshape(-1)
         else:

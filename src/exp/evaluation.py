@@ -112,6 +112,7 @@ def significance_matrix(
     if models is not None:
         keep = match_many(pivot, models)
         if keep:
+            # preserve column order while deduplicating
             keep = list(dict.fromkeys(keep))
             pivot = pivot[keep]
         else:

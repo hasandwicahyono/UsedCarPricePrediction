@@ -18,7 +18,13 @@ class ShapAnalyzer:
         self, 
         shap_store: list, 
         background_size: int = 100, 
+        max_tree_eval_samples: int = 500,
         max_eval_samples: int = 300, 
+        max_entries_per_model: int | None = None,
+        fast_background_size: int = 50,
+        fast_max_tree_eval_samples: int = 200,
+        fast_max_eval_samples: int = 120,
+        fast_max_entries_per_model: int = 2,
         seed: int = 42, 
         plot_manager: any = None,
         models: list[str] | None = None,
@@ -26,7 +32,13 @@ class ShapAnalyzer:
         
         self.store = shap_store
         self.background_size = background_size
+        self.max_tree_eval_samples = max_tree_eval_samples
         self.max_eval_samples = max_eval_samples
+        self.max_entries_per_model = max_entries_per_model
+        self.fast_background_size = fast_background_size
+        self.fast_max_tree_eval_samples = fast_max_tree_eval_samples
+        self.fast_max_eval_samples = fast_max_eval_samples
+        self.fast_max_entries_per_model = fast_max_entries_per_model
         self.rng = np.random.default_rng(seed)
         self.grouped = self._group(models)
         self._idx_map_cache = {}
@@ -50,10 +62,39 @@ class ShapAnalyzer:
     def available_models(self):
         return list(self.grouped.keys())
 
+    @staticmethod
+    def _is_random_forest_entry(item: dict, model_name: str) -> bool:
+        model_type = str(item.get("model_type", ""))
+        if model_type.lower() == "randomforest":
+            return True
+        return "randomforest" in str(model_name).lower()
+
     def compute(self, model_name: str):
         if model_name not in self.grouped:
             raise ValueError(f"No SHAP data for {model_name}")
         entries = self.grouped[model_name]
+
+        is_rf = any(self._is_random_forest_entry(e, model_name) for e in entries)
+
+        max_entries = self.max_entries_per_model
+        if is_rf:
+            if max_entries is None:
+                max_entries = self.fast_max_entries_per_model
+            else:
+                max_entries = min(max_entries, self.fast_max_entries_per_model)
+
+        if max_entries is not None and len(entries) > max_entries:
+            keep_idx = self.rng.choice(len(entries), max_entries, replace=False)
+            entries = [entries[i] for i in np.sort(keep_idx)]
+
+        bg_size = self.background_size
+        max_eval = self.max_eval_samples
+        max_tree_eval = self.max_tree_eval_samples
+        if is_rf:
+            bg_size = min(bg_size, self.fast_background_size)
+            max_eval = min(max_eval, self.fast_max_eval_samples)
+            max_tree_eval = min(max_tree_eval, self.fast_max_tree_eval_samples)
+
         feature_lists = [list(e["feature_names"]) for e in entries]
         common = set(feature_lists[0])
         for fns in feature_lists[1:]:
@@ -79,15 +120,25 @@ class ShapAnalyzer:
                 raise KeyError(f"Missing explain_policy for {model_name}")
 
             # background
-            bg_n = min(self.background_size, X.shape[0])
+            bg_n = min(bg_size, X.shape[0])
             bg_idx = self.rng.choice(X.shape[0], bg_n, replace=False)
             X_bg = X[bg_idx]
 
             explainer = ShapExplainerFactory.create(policy, model, X_bg) #build_shap_explainer(policy, model, X_bg)
 
             X_eval = X
-            if policy == "kernel" and X.shape[0] > self.max_eval_samples:
-                idx = self.rng.choice(X.shape[0], self.max_eval_samples, replace=False)
+            # Kernel explainer is always expensive.
+            if policy == "kernel" and X.shape[0] > max_eval:
+                idx = self.rng.choice(X.shape[0], max_eval, replace=False)
+                X_eval = X[idx]
+            # Tree policy can still be slow when it falls back to model-agnostic SHAP.
+            # Detect fallback flag from TreeShapExplainer and cap eval rows.
+            if (
+                policy == "tree"
+                and getattr(explainer, "_use_call_api", False)
+                and X.shape[0] > max_tree_eval
+            ):
+                idx = self.rng.choice(X.shape[0], max_tree_eval, replace=False)
                 X_eval = X[idx]
 
             sv = np.asarray(explainer.explain(X_eval))
@@ -110,6 +161,8 @@ class ShapAnalyzer:
 
     def beeswarm(self, model_name: str, max_display: int = 20, figsize=(10, 6), save: bool = True):
         X, sv, fn = self.compute(model_name)
+        
+        # --- Figure 1: Summary / beeswarm ---
         plt.figure(figsize=figsize)
         shap.summary_plot(
             sv, 
@@ -118,7 +171,41 @@ class ShapAnalyzer:
             max_display=max_display, 
             show=False
         )
+        plt.title(f"SHAP Beeswarm Plot for {model_name}")
         plt.tight_layout()
         if save and self.plot_manager is not None:
             self.plot_manager.save(f"shap_beeswarm_{model_name.lower()}")
+        plt.show()
+
+        # --- Figure 2: Global importance (bar) ---
+        plt.figure(figsize=figsize)
+        shap.summary_plot(
+            sv, 
+            X, 
+            plot_type="bar",
+            feature_names=fn, 
+            max_display=max_display, 
+            show=False
+        )
+        plt.title(f"SHAP Global Importance Plot for {model_name}")
+        plt.tight_layout()
+        if save and self.plot_manager is not None:
+            self.plot_manager.save(f"shap_GlobalImportance_{model_name.lower()}")
+        plt.show()
+
+        # --- Figure 3: Waterfall ---
+        plt.figure(figsize=figsize)
+        waterfall_values = sv
+        if not isinstance(sv, shap.Explanation):
+            waterfall_values = shap.Explanation(values=sv, data=X, feature_names=fn, base_values=0.0)
+        # Use first instance for waterfall to avoid plotting all rows at once.
+        shap.plots.waterfall(
+            waterfall_values[0],
+            max_display=max_display,
+            show=False
+        )
+        plt.title(f"SHAP Waterfall Plot for {model_name}")
+        plt.tight_layout()
+        if save and self.plot_manager is not None:
+            self.plot_manager.save(f"shap_Waterfall_{model_name.lower()}")
         plt.show()

@@ -322,12 +322,18 @@ class ExperimentFacade:
     def significance_matrix(self, metric="MAE", models: list[str] | None = None):
         return self.evaluator.significance_matrix(self.runner.results_, metric=metric, models=models)
 
-    def shap(self, plot_dir: str = "outputs/figures/shap", models: list[str] | None = None):
+    def shap(
+        self,
+        plot_dir: str = "outputs/figures/shap",
+        models: list[str] | None = None,
+        max_entries_per_model: int | None = None,
+    ):
         pm = PlotManager(base_dir=plot_dir)
         return ShapAnalyzer(
             self.runner.shap_store_,
             background_size=self.cfg.shap_background_size,
             max_eval_samples=self.cfg.shap_max_eval_samples,
+            max_entries_per_model=max_entries_per_model,
             seed=self.cfg.seed,
             plot_manager=pm,
             models=models

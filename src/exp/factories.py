@@ -6,7 +6,6 @@ from .metrics import MetricStrategy, make_metric
 from .models import ModelFactory, ModelStrategy
 from .preprocess import PreprocessorBuilder
 from .config import FeatureSchema
-from .shap_explainers import ShapExplainerFactory
 from .specs import MetricSpec, ModelSpec, PreprocessSpec
 
 
@@ -26,6 +25,9 @@ def build_model(
     params: Optional[dict] = None,
     residual_cfgs: Optional[list] = None,
 ) -> ModelStrategy:
+    if params:
+        # Defensive: strip residual params so base models never see them.
+        params = {k: v for k, v in params.items() if not k.startswith("residual__")}
     if isinstance(spec_or_name, ModelSpec):
         spec = spec_or_name.normalize()
         spec.validate()
@@ -51,9 +53,9 @@ def get_preprocess_policy(name: str, default: dict) -> dict:
     cls = get_model_class(name)
     return getattr(cls, "preprocess_policy", default)
 
-
-def get_model_names():
-    return ModelFactory.MAP.keys()
+def get_interaction_policy(name: str, default: str = "none") -> str:
+    cls = get_model_class(name)
+    return getattr(cls, "interaction_policy", default)
 
 
 def build_preprocessor(schema: FeatureSchema, spec: Optional[PreprocessSpec] = None):
@@ -75,7 +77,3 @@ def build_preprocessor(schema: FeatureSchema, spec: Optional[PreprocessSpec] = N
         model_name=spec.model_name,
         trial_id=spec.trial_id,
     )
-
-
-def build_shap_explainer(policy: str, model, X_background):
-    return ShapExplainerFactory.create(policy, model, X_background)

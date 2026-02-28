@@ -17,6 +17,22 @@ class BaseShapExplainer(ABC):
         self.model = model
         self.X_background = X_background
 
+    @staticmethod
+    def _as_2d_values(values):
+        # Normalize SHAP outputs across explainers/versions:
+        # - Explanation -> .values
+        # - list (multi-output) -> first output
+        # - 3D arrays (n, f, o) -> first output
+        if hasattr(values, "values"):
+            values = values.values
+        if isinstance(values, list):
+            values = values[0] if values else values
+        if values is None:
+            raise ValueError("SHAP explainer returned no values")
+        if getattr(values, "ndim", 0) == 3:
+            values = values[:, :, 0]
+        return values
+
     @abstractmethod
     def explain(self, X): ...
 
@@ -25,11 +41,20 @@ class TreeShapExplainer(BaseShapExplainer):
 
     def __init__(self, model, X_background):
         super().__init__(model, X_background)
-        self.explainer = shap.TreeExplainer(model)
+        self._use_call_api = False
+        try:
+            self.explainer = shap.TreeExplainer(model)
+        except Exception:
+            # Some SHAP/sklearn combinations reject otherwise tree-based models.
+            # Fall back to the generic explainer API to keep analysis running.
+            self.explainer = shap.Explainer(model.predict, X_background)
+            self._use_call_api = True
 
     def explain(self, X):
+        if self._use_call_api:
+            return self._as_2d_values(self.explainer(X))
         # Disable strict additivity check to avoid failures from small numerical drift.
-        return self.explainer.shap_values(X, check_additivity=False)
+        return self._as_2d_values(self.explainer.shap_values(X, check_additivity=False))
     
 class LinearShapExplainer(BaseShapExplainer):
     policy = "linear"
@@ -39,7 +64,7 @@ class LinearShapExplainer(BaseShapExplainer):
         self.explainer = shap.LinearExplainer(model, X_background)
 
     def explain(self, X):
-        return self.explainer.shap_values(X)
+        return self._as_2d_values(self.explainer.shap_values(X))
 
 class KernelShapExplainer(BaseShapExplainer):
     policy = "kernel"
@@ -52,7 +77,7 @@ class KernelShapExplainer(BaseShapExplainer):
         )
 
     def explain(self, X):
-        return self.explainer.shap_values(X)
+        return self._as_2d_values(self.explainer.shap_values(X))
 
 class DeepShapExplainer(BaseShapExplainer):
     policy = "deep"
@@ -63,9 +88,7 @@ class DeepShapExplainer(BaseShapExplainer):
 
     def explain(self, X):
         values = self.explainer.shap_values(X, check_additivity=False)
-        if isinstance(values, list) and len(values) == 1:
-            return values[0]
-        return values
+        return self._as_2d_values(values)
 
 class GradientShapExplainer(BaseShapExplainer):
     policy = "gradient"
@@ -76,9 +99,7 @@ class GradientShapExplainer(BaseShapExplainer):
 
     def explain(self, X):
         values = self.explainer.shap_values(X)
-        if isinstance(values, list) and len(values) == 1:
-            return values[0]
-        return values
+        return self._as_2d_values(values)
 
 class ShapExplainerFactory:
     @staticmethod

@@ -75,7 +75,8 @@ class SafePowerTransformer(BaseEstimator, TransformerMixin):
         all_idx = np.arange(len(feature_names), dtype=int)
         X_all = self._select_columns(X, all_idx)
 
-        # Fast path: fit once when all numeric columns are valid.
+        # Fast path: when all numeric columns are valid, fit once on the full matrix.
+        # Fallback to column-wise probing only if this fails.
         try:
             self._pt = PowerTransformer(
                 method=self.method,

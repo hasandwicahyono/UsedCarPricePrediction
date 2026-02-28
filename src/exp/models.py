@@ -30,7 +30,13 @@ from tensorflow.keras.layers import Dense
 from tensorflow.keras.optimizers import Adam, AdamW, RMSprop, SGD
 
 from .registry import MODEL_REGISTRY, RESIDUAL_REGISTRY
-from .policies import DEFAULT_PREPROCESS_POLICY, PREPROCESS_POLICIES, EXPLAIN_POLICIES
+from .policies import (
+    DEFAULT_PREPROCESS_POLICY,
+    DEFAULT_INTERACTION_POLICY,
+    PREPROCESS_POLICIES,
+    INTERACTION_FEATURE_POLICIES,
+    EXPLAIN_POLICIES,
+)
 
 # =====================================================
 # Base Strategy Registries
@@ -40,6 +46,7 @@ class ModelStrategy(ABC):
     registry = MODEL_REGISTRY
     model_type: str
     preprocess_policy: dict = DEFAULT_PREPROCESS_POLICY
+    interaction_policy: str = DEFAULT_INTERACTION_POLICY
     explain_policy: str = "tree"
 
     def __init_subclass__(cls, **kwargs):
@@ -49,6 +56,8 @@ class ModelStrategy(ABC):
             # set defaults only if child didn't override
             if not hasattr(cls, "preprocess_policy") or cls.preprocess_policy == ModelStrategy.preprocess_policy:
                 cls.preprocess_policy = PREPROCESS_POLICIES.get(cls.model_type, DEFAULT_PREPROCESS_POLICY)
+            if not hasattr(cls, "interaction_policy") or cls.interaction_policy == ModelStrategy.interaction_policy:
+                cls.interaction_policy = INTERACTION_FEATURE_POLICIES.get(cls.model_type, DEFAULT_INTERACTION_POLICY)
             if not hasattr(cls, "explain_policy") or cls.explain_policy == ModelStrategy.explain_policy:
                 cls.explain_policy = EXPLAIN_POLICIES.get(cls.model_type, "tree")
 
@@ -323,14 +332,14 @@ class ResidualStackedModel(ModelStrategy):
 
             r.fit(X, residuals, Xva, residuals_val)
 
-            current_pred = current_pred + r.predict(X)
+            current_pred += r.predict(X)
             if Xva is not None:
-                current_val_pred = current_val_pred + r.predict(Xva)
+                current_val_pred += r.predict(Xva)
 
     def predict(self, X):
         pred = self.base.predict(X)
         for r in self.residuals:
-            pred = pred + r.predict(X)
+            pred += r.predict(X)
         return pred
 
 
@@ -359,7 +368,7 @@ class ModelFactory:
 
         base_params = {
             k: v for k, v in params.items()
-            if k not in ModelFactory.NON_MODEL_KEYS
+            if k not in ModelFactory.NON_MODEL_KEYS and not k.startswith("residual__")
         }
         base = ModelStrategy.registry[name](seed, base_params)
 
@@ -372,27 +381,3 @@ class ModelFactory:
             residuals.append(cls(seed=seed, **cfg.get("params", {})))
 
         return ResidualStackedModel(base, residuals)
-
-
-class ModelBuilder:
-    def __init__(self, name: str, seed: int):
-        self.name = name
-        self.seed = seed
-        self.params: Dict[str, Any] = {}
-        self.residual_cfgs: Optional[list] = None
-
-    def with_params(self, params: Dict[str, Any]) -> "ModelBuilder":
-        self.params = dict(params)
-        return self
-
-    def with_residuals(self, residual_cfgs: Optional[list]) -> "ModelBuilder":
-        self.residual_cfgs = residual_cfgs
-        return self
-
-    def build(self) -> ModelStrategy:
-        return ModelFactory.create(
-            name=self.name,
-            seed=self.seed,
-            params=self.params,
-            residual_cfgs=self.residual_cfgs,
-        )
