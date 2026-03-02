@@ -2,6 +2,7 @@ from __future__ import annotations
 
 DEFAULT_PREPROCESS_POLICY = dict(cat_encoding="onehot", use_feature_selection=False)
 DEFAULT_INTERACTION_POLICY = "none"
+DEFAULT_EXPLAIN_POLICY = "kernel"
 
 PREPROCESS_POLICIES = {
     "LinearRegression": dict(cat_encoding="target", use_feature_selection=True),

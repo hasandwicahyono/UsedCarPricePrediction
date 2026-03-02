@@ -33,6 +33,7 @@ from .registry import MODEL_REGISTRY, RESIDUAL_REGISTRY
 from .policies import (
     DEFAULT_PREPROCESS_POLICY,
     DEFAULT_INTERACTION_POLICY,
+    DEFAULT_EXPLAIN_POLICY,
     PREPROCESS_POLICIES,
     INTERACTION_FEATURE_POLICIES,
     EXPLAIN_POLICIES,
@@ -47,7 +48,7 @@ class ModelStrategy(ABC):
     model_type: str
     preprocess_policy: dict = DEFAULT_PREPROCESS_POLICY
     interaction_policy: str = DEFAULT_INTERACTION_POLICY
-    explain_policy: str = "tree"
+    explain_policy: str = DEFAULT_EXPLAIN_POLICY
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -59,7 +60,7 @@ class ModelStrategy(ABC):
             if not hasattr(cls, "interaction_policy") or cls.interaction_policy == ModelStrategy.interaction_policy:
                 cls.interaction_policy = INTERACTION_FEATURE_POLICIES.get(cls.model_type, DEFAULT_INTERACTION_POLICY)
             if not hasattr(cls, "explain_policy") or cls.explain_policy == ModelStrategy.explain_policy:
-                cls.explain_policy = EXPLAIN_POLICIES.get(cls.model_type, "tree")
+                cls.explain_policy = EXPLAIN_POLICIES.get(cls.model_type, DEFAULT_EXPLAIN_POLICY)
 
 
     def fit(self, Xtr, ytr, Xva=None, yva=None):
@@ -68,12 +69,6 @@ class ModelStrategy(ABC):
     def predict(self, X):
         return self.model.predict(X)
     
-    #@abstractmethod
-    #def fit(self, Xtr, ytr, Xva=None, yva=None): ...
-#
-    #@abstractmethod
-    #def predict(self, Xte) -> np.ndarray: ...
-
 
 class ResidualStrategy(ABC):
     registry = RESIDUAL_REGISTRY
@@ -83,7 +78,6 @@ class ResidualStrategy(ABC):
         super().__init_subclass__(**kwargs)
         if hasattr(cls, "model_type"):
             ResidualStrategy.registry.register(cls.model_type, cls)
-
 
     def fit(self, X, residuals, X_val=None, residuals_val=None):
         self.model.fit(X, residuals)
@@ -122,7 +116,6 @@ class SVRStrategy(ModelStrategy):
 
     def __init__(self, seed: int, params: Dict[str, Any]):
         self.model = SVR(**params)
-
 
 
 # =====================================================
@@ -225,7 +218,7 @@ class XGBoostStrategy(ModelStrategy):
 class ElasticNetResidual(ResidualStrategy):
     model_type = "ElasticNet"
 
-    def __init__(self, seed=42, **params: Any):#alpha=0.001, l1_ratio=0.5):
+    def __init__(self, seed=42, **params: Any):
         self.model = ElasticNet(
             alpha=params.get("alpha", 0.001), 
             l1_ratio=params.get("l1_ratio", 0.5), 
@@ -236,7 +229,7 @@ class ElasticNetResidual(ResidualStrategy):
 class QuantileResidual(ResidualStrategy):
     model_type = "Quantile"
 
-    def __init__(self, seed: int = 42, **params: Any):#quantile=0.75, alpha=0.001):
+    def __init__(self, seed: int = 42, **params: Any):
         self.model = QuantileRegressor(
             quantile=params.get("quantile", 0.75), alpha=params.get("alpha", 0.001), solver="highs"
         )
@@ -245,7 +238,7 @@ class QuantileResidual(ResidualStrategy):
 class HuberResidual(ResidualStrategy):
     model_type = "Huber"
 
-    def __init__(self, seed: int = 42, **params: Any):#epsilon=1.35, alpha=0.0001):
+    def __init__(self, seed: int = 42, **params: Any):
         self.model = HuberRegressor(epsilon=params.get("epsilon", 1.35), alpha=params.get("alpha", 0.0001))
 
 
