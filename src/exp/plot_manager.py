@@ -68,6 +68,35 @@ class PlotManager:
         ax.grid(axis="x", linestyle="--", alpha=0.4)
         return fig
 
+    def plot_correlation_heatmap(
+        self,
+        df: pd.DataFrame,
+        cols: list,
+        title: str = "Correlation Heatmap (Numeric Features + Target)",
+        figsize=(9, 7),
+        annotate: bool = True,
+    ):
+        """
+        Correlation heatmap for specified columns.
+        """
+        corr = df[cols].corr()
+        fig, ax = plt.subplots(figsize=figsize)
+        im = ax.imshow(corr, cmap="coolwarm", vmin=-1, vmax=1)
+        fig.colorbar(im, ax=ax, label="Correlation")
+        ax.set_xticks(range(len(cols)))
+        ax.set_yticks(range(len(cols)))
+        ax.set_xticklabels(cols, rotation=45, ha="right")
+        ax.set_yticklabels(cols)
+
+        if annotate:
+            for i in range(len(cols)):
+                for j in range(len(cols)):
+                    val = corr.iat[i, j]
+                    ax.text(j, i, f"{val:.2f}", ha="center", va="center", fontsize=8, color="black")
+
+        ax.set_title(title)
+        return fig
+
 
 class PointRangePlot(PlotStrategy):
     def __init__(self, plot_manager: PlotManager):

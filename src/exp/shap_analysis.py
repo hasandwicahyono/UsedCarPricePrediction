@@ -42,6 +42,7 @@ class ShapAnalyzer:
         self.rng = np.random.default_rng(seed)
         self.grouped = self._group(models)
         self._idx_map_cache = {}
+        self._compute_cache = {}
         self.plot_manager = plot_manager
 
     def _group(self, models: list[str] | None = None):
@@ -72,6 +73,21 @@ class ShapAnalyzer:
     def compute(self, model_name: str):
         if model_name not in self.grouped:
             raise ValueError(f"No SHAP data for {model_name}")
+
+        cache_key = (
+            model_name,
+            self.background_size,
+            self.max_tree_eval_samples,
+            self.max_eval_samples,
+            self.max_entries_per_model,
+            self.fast_background_size,
+            self.fast_max_tree_eval_samples,
+            self.fast_max_eval_samples,
+            self.fast_max_entries_per_model,
+        )
+        if cache_key in self._compute_cache:
+            return self._compute_cache[cache_key]
+
         entries = self.grouped[model_name]
 
         is_rf = any(self._is_random_forest_entry(e, model_name) for e in entries)
@@ -144,20 +160,24 @@ class ShapAnalyzer:
             sv = np.asarray(explainer.explain(X_eval))
 
             fn_item = list(item["feature_names"])
-            cache_key = (model_name, tuple(fn_item), common_tuple)
-            idx_map = self._idx_map_cache.get(cache_key)
+            idx_cache_key = (model_name, tuple(fn_item), common_tuple)
+            idx_map = self._idx_map_cache.get(idx_cache_key)
             if idx_map is None:
                 idx_lookup = {f: i for i, f in enumerate(fn_item)}
                 idx_map = [idx_lookup[f] for f in common_ordered]
-                self._idx_map_cache[cache_key] = idx_map
+                self._idx_map_cache[idx_cache_key] = idx_map
 
             X_all.append(X_eval[:, idx_map])
             sv_all.append(sv[:, idx_map])
  
         cleaned_names = [clean_feature_name(f) for f in common_ordered]
         if len(X_all) == 1:
-            return X_all[0], sv_all[0], cleaned_names
-        return np.vstack(X_all), np.vstack(sv_all), cleaned_names
+            out = (X_all[0], sv_all[0], cleaned_names)
+            self._compute_cache[cache_key] = out
+            return out
+        out = (np.vstack(X_all), np.vstack(sv_all), cleaned_names)
+        self._compute_cache[cache_key] = out
+        return out
 
     def beeswarm(self, model_name: str, max_display: int = 20, figsize=(10, 6), save: bool = True):
         X, sv, fn = self.compute(model_name)

@@ -1,0 +1,20 @@
+column,level,count
+model, Fiesta,6557
+model, Golf,4863
+model, Focus,4588
+model, C Class,3747
+model, Corsa,3441
+model, Polo,3287
+model, Astra,2805
+model, A Class,2561
+model, 3 Series,2443
+model, Kuga,2225
+transmission,Manual,56445
+transmission,Semi-Auto,22677
+transmission,Automatic,20056
+transmission,Other,9
+fuelType,Petrol,54928
+fuelType,Diesel,40928
+fuelType,Hybrid,3078
+fuelType,Other,247
+fuelType,Electric,6

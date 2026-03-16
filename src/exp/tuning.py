@@ -386,6 +386,7 @@ class NestedCVRunner:
         run_id: str,
         inner_folds: List[Dict[str, Any]],
         pre_cache: dict,
+        interaction_cache: dict,
         stopping_policy: CoverageAwareEarlyStoppingPolicy,
     ) -> float:
 
@@ -417,6 +418,10 @@ class NestedCVRunner:
             residual_cfg_use["params"] = residual_params
 
         scores = []
+        supports_pruning = self.metric.supports_pruning()
+        metric_compute = self.metric.compute
+        metric_as_loss = self.metric.as_loss
+        direction = self.metric.direction
         for fold in inner_folds:
             step = fold["step"]
             Xtr_raw = fold["Xtr_raw"]
@@ -432,13 +437,17 @@ class NestedCVRunner:
                 Xva_use = Xva_raw
                 schema_use = self.schema
                 if interaction_policy != "none":
-                    Xtr_use, add_num, add_cat = add_interaction_features(Xtr_raw, interaction_policy)
-                    Xva_use, _, _ = add_interaction_features(Xva_raw, interaction_policy)
-                    schema_use = FeatureSchema(
-                        target=self.schema.target,
-                        num_cols=self.schema.num_cols + add_num,
-                        cat_cols=self.schema.cat_cols + add_cat,
-                    )
+                    if key in interaction_cache:
+                        Xtr_use, Xva_use, schema_use = interaction_cache[key]
+                    else:
+                        Xtr_use, add_num, add_cat = add_interaction_features(Xtr_raw, interaction_policy)
+                        Xva_use, _, _ = add_interaction_features(Xva_raw, interaction_policy)
+                        schema_use = FeatureSchema(
+                            target=self.schema.target,
+                            num_cols=self.schema.num_cols + add_num,
+                            cat_cols=self.schema.cat_cols + add_cat,
+                        )
+                        interaction_cache[key] = (Xtr_use, Xva_use, schema_use)
                     pre = build_preprocessor(
                         schema_use,
                         PreprocessSpec(
@@ -490,18 +499,18 @@ class NestedCVRunner:
 
             # Guard against NaN/inf in predictions or targets
             if not np.isfinite(pred_price).all() or not np.isfinite(yva_price).all():
-                return float("-inf") if self.metric.direction == "maximize" else float("inf")
+                return float("-inf") if direction == "maximize" else float("inf")
 
             mask = np.isfinite(pred_price) & np.isfinite(yva_price)
             if mask.sum() < 2:
-                return float("-inf") if self.metric.direction == "maximize" else float("inf")
+                return float("-inf") if direction == "maximize" else float("inf")
 
-            score = self.metric.compute(yva_price[mask], pred_price[mask])
+            score = metric_compute(yva_price[mask], pred_price[mask])
             scores.append(score)
 
             # metric-aware pruning: only for safe loss-like metrics
-            if self.metric.supports_pruning():
-                trial.report(self.metric.as_loss(score), step)
+            if supports_pruning:
+                trial.report(metric_as_loss(score), step)
                 if trial.should_prune():
                     stopping_policy.on_trial_pruned()
                     raise optuna.TrialPruned()
@@ -548,7 +557,9 @@ class NestedCVRunner:
             fold_seed = self.cfg.seed + ofold
 
             pre_cache = {}
+            outer_interaction_cache = {}
             inner_folds_by_model = {}
+            inner_interaction_cache_by_model = {}
             for model_name, residual_cfg in self.expanded_models:
                 fixed, search = self.space.get(model_name)
                 fixed_r: Dict[str, Any] = {}
@@ -574,8 +585,10 @@ class NestedCVRunner:
                             }
                         )
                     inner_folds_by_model[model_name] = prepared_folds
+                    inner_interaction_cache_by_model[model_name] = {}
 
                 inner_folds = inner_folds_by_model[model_name]
+                interaction_cache = inner_interaction_cache_by_model[model_name]
 
                 residual_tag = residual_cfg["kind"] if residual_cfg is not None else "base"
                 study_name_custom = f"{model_name}_OuterFold_{ofold}_residual_cfg_{residual_tag}"
@@ -617,6 +630,7 @@ class NestedCVRunner:
                         self.run_id,
                         inner_folds,
                         pre_cache,
+                        interaction_cache,
                         stopping_policy
                     ),
                     n_trials=self.cfg.n_trials,
@@ -658,13 +672,18 @@ class NestedCVRunner:
                 schema_use = self.schema
                 interaction_policy = interaction_policy_by_model[model_name]
                 if interaction_policy != "none":
-                    Xtr_use, add_num, add_cat = add_interaction_features(Xtr_raw, interaction_policy)
-                    Xte_use, _, _ = add_interaction_features(Xte_raw, interaction_policy)
-                    schema_use = FeatureSchema(
-                        target=self.schema.target,
-                        num_cols=self.schema.num_cols + add_num,
-                        cat_cols=self.schema.cat_cols + add_cat,
-                    )
+                    outer_key = (model_name, interaction_policy)
+                    if outer_key in outer_interaction_cache:
+                        Xtr_use, Xte_use, schema_use = outer_interaction_cache[outer_key]
+                    else:
+                        Xtr_use, add_num, add_cat = add_interaction_features(Xtr_raw, interaction_policy)
+                        Xte_use, _, _ = add_interaction_features(Xte_raw, interaction_policy)
+                        schema_use = FeatureSchema(
+                            target=self.schema.target,
+                            num_cols=self.schema.num_cols + add_num,
+                            cat_cols=self.schema.cat_cols + add_cat,
+                        )
+                        outer_interaction_cache[outer_key] = (Xtr_use, Xte_use, schema_use)
                     pre = build_preprocessor(
                         schema_use,
                         PreprocessSpec(

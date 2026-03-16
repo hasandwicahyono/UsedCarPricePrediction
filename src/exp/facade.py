@@ -10,7 +10,14 @@ from collections import Counter
 from .config import FeatureSchema, ExperimentConfig
 from .tuning import NestedCVRunner
 from .factories import build_model, build_preprocessor, get_preprocess_policy
-from .policies import DEFAULT_PREPROCESS_POLICY
+from .policies import (
+    DEFAULT_PREPROCESS_POLICY,
+    DEFAULT_INTERACTION_POLICY,
+    DEFAULT_EXPLAIN_POLICY,
+    PREPROCESS_POLICIES,
+    INTERACTION_FEATURE_POLICIES,
+    EXPLAIN_POLICIES,
+)
 from .specs import PreprocessSpec
 from .evaluation import paired_tests, significance_matrix, DefaultEvaluator
 from .shap_analysis import ShapAnalyzer
@@ -122,6 +129,67 @@ class ExperimentFacade:
         self._save_best_model_artifact()
         return self.results_
 
+    def data_info(self, out_dir: str = "outputs/csvs", prefix: str = "dataset") -> dict:
+        """
+        Summarize dataset information and save summary tables.
+        Returns a dict with key metrics.
+        """
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        df = self.df.copy()
+        num_cols = self.schema.num_cols + [self.schema.target]
+        cat_cols = self.schema.cat_cols
+
+        info = {
+            "shape": df.shape,
+            "n_rows": df.shape[0],
+            "n_cols": df.shape[1],
+            "n_numeric": len(self.schema.num_cols),
+            "n_categorical": len(cat_cols),
+        }
+
+        # Missing values summary
+        missing = df.isna().sum().sort_values(ascending=False)
+        missing = missing[missing > 0]
+        missing.to_frame("missing_count").to_csv(out_path / f"{prefix}_missing_values.csv")
+
+        # Numeric summary
+        df[num_cols].describe().T.to_csv(out_path / f"{prefix}_numeric_summary.csv")
+
+        # Categorical summary (top 10 per column)
+        cat_summary_rows = []
+        for col in cat_cols:
+            vc = df[col].value_counts(dropna=False).head(10)
+            for level, count in vc.items():
+                cat_summary_rows.append({"column": col, "level": level, "count": count})
+        if cat_summary_rows:
+            pd.DataFrame(cat_summary_rows).to_csv(out_path / f"{prefix}_categorical_top10.csv", index=False)
+
+        return df.info(verbose=True, show_counts=True, memory_usage="deep")
+
+    def correlation_plot(
+        self,
+        out_dir: str = "outputs/figures/correlation",
+        filename: str = "correlation_heatmap.png",
+        figsize=(9, 7),
+    ) -> str:
+        """
+        Save a correlation heatmap (numeric features + target) with scores.
+        Returns the saved file path.
+        """
+        num_cols = self.schema.num_cols + [self.schema.target]
+        plot_manager = PlotManager(base_dir=out_dir, dpi=300, fmt="png", tight_layout=True)
+        fig = plot_manager.plot_correlation_heatmap(
+            df=self.df,
+            cols=num_cols,
+            figsize=figsize,
+        )
+
+        stem = filename.rsplit(".", 1)[0]
+        plot_manager.save_fig(fig, stem)
+        return str(Path(out_dir) / f"{stem}.png")
+
     def _save_best_model_artifact(self, out_dir="outputs/artifacts"):
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -207,6 +275,7 @@ class ExperimentFacade:
                 continue
             records_by_model.setdefault(m, []).append(rec)
         pre_cache = {}
+        canon_cfg = lambda cfg: json.dumps(cfg, sort_keys=True) if isinstance(cfg, dict) else None
 
         for model_name in self.model_names:
             print(f"[final fit] {model_name}")
@@ -229,10 +298,11 @@ class ExperimentFacade:
                 pre_cache[pre_key] = (pre, Xp)
 
             # build model with BEST params
-            params = best_params[model_name]["aggregated"]
+            params = dict(best_params[model_name]["aggregated"])
             if model_name == "RandomForest" and params.get("bootstrap") is False:
                 params["max_samples"] = None
             residual_cfg = best_params[model_name].get("residual_cfg")
+            residual_cfg_key = canon_cfg(residual_cfg)
             model = build_model(
                 model_name,
                 seed=self.cfg.seed,
@@ -263,10 +333,13 @@ class ExperimentFacade:
             for rc in residual_cfgs:
                 if not rc or rc.get("kind") in (None, "None"):
                     continue
-                key = json.dumps(rc, sort_keys=True)
+                key = canon_cfg(rc)
                 if key in seen:
                     continue
                 seen.add(key)
+                # Skip duplicate retrain when this variant is exactly the already-fitted best residual model.
+                if key == residual_cfg_key:
+                    continue
 
                 r_model = build_model(
                     model_name,
@@ -299,14 +372,22 @@ class ExperimentFacade:
                     top = [r for _, r in scored[: max(1, int(top_k))]]
                     models = []
                     for r in top:
-                        m = build_model(
-                            model_name,
-                            seed=self.cfg.seed,
-                            params=r.get("params", {}),
-                            residual_cfgs=[r.get("residual_cfg")] if r.get("residual_cfg") else None,
-                        )
-                        m.fit(Xp, y)
-                        models.append(m)
+                        r_params = dict(r.get("params", {}))
+                        if model_name == "RandomForest" and r_params.get("bootstrap") is False:
+                            r_params["max_samples"] = None
+                        r_residual_cfg = r.get("residual_cfg")
+                        # Reuse already-fitted final model when same params + residual config.
+                        if r_params == params and canon_cfg(r_residual_cfg) == residual_cfg_key:
+                            models.append(model)
+                        else:
+                            m = build_model(
+                                model_name,
+                                seed=self.cfg.seed,
+                                params=r_params,
+                                residual_cfgs=[r_residual_cfg] if r_residual_cfg else None,
+                            )
+                            m.fit(Xp, y)
+                            models.append(m)
 
                     if models:
                         ensemble = EnsembleModel(models)
@@ -347,7 +428,15 @@ class ExperimentFacade:
                 "outer_folds": self.cfg.outer_folds,
                 "inner_folds": self.cfg.inner_folds,
                 "n_trials": self.cfg.n_trials,
-                "log_target": self.cfg.log_target
+                "log_target": self.cfg.log_target,
+                "policies": {
+                    "default_preprocess_policy": DEFAULT_PREPROCESS_POLICY,
+                    "default_interaction_policy": DEFAULT_INTERACTION_POLICY,
+                    "default_explain_policy": DEFAULT_EXPLAIN_POLICY,
+                    "preprocess_policies": PREPROCESS_POLICIES,
+                    "interaction_feature_policies": INTERACTION_FEATURE_POLICIES,
+                    "explain_policies": EXPLAIN_POLICIES,
+                },
             },
             "best_params": self.runner.best_params_records_
         }
