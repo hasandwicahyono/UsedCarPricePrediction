@@ -42,16 +42,24 @@ def aggregate_hyperparams(param_dicts):
         values = []
         all_numeric = True
         all_int = True
+        all_bool = True
 
         for p in param_dicts:
             if k not in p:
                 continue
-            v = v.item() if isinstance(v, np.generic) else v # _to_builtin_scalar(p[k])
+            v = p[k]
+            if isinstance(v, np.generic):
+                v = v.item()
             if isinstance(v, list):
                 v = tuple(v)
             values.append(v)
 
-            if not isinstance(v, (int, float)) and not isinstance(v, bool): #_is_numeric(v):
+            if not isinstance(v, bool):
+                all_bool = False
+            if isinstance(v, bool):
+                all_numeric = False
+                all_int = False
+            elif not isinstance(v, (int, float)): #_is_numeric(v):
                 all_numeric = False
                 all_int = False
             elif not isinstance(v, int):
@@ -60,7 +68,9 @@ def aggregate_hyperparams(param_dicts):
         if not values:
             continue
 
-        if all_numeric:
+        if all_bool:
+            aggregated[k] = Counter(values).most_common(1)[0][0]
+        elif all_numeric:
             agg = float(np.median(np.asarray(values, dtype=float)))
             if all_int:
                 agg = int(round(agg))
@@ -88,6 +98,17 @@ def aggregate_residual_cfg(residual_cfgs):
     if mode_val is None:
         return None
     return json.loads(mode_val)
+
+
+def _normalize_model_params(model_name: str, params: dict) -> dict:
+    normalized = dict(params)
+    if model_name == "RandomForest" and "bootstrap" in normalized:
+        bootstrap = normalized["bootstrap"]
+        if isinstance(bootstrap, (int, np.integer)) and bootstrap in (0, 1):
+            normalized["bootstrap"] = bool(bootstrap)
+        if normalized.get("bootstrap") is False:
+            normalized["max_samples"] = None
+    return normalized
 
 
 class EnsembleModel:
@@ -298,9 +319,9 @@ class ExperimentFacade:
                 pre_cache[pre_key] = (pre, Xp)
 
             # build model with BEST params
-            params = dict(best_params[model_name]["aggregated"])
-            if model_name == "RandomForest" and params.get("bootstrap") is False:
-                params["max_samples"] = None
+            params = _normalize_model_params(
+                model_name, best_params[model_name]["aggregated"]
+            )
             residual_cfg = best_params[model_name].get("residual_cfg")
             residual_cfg_key = canon_cfg(residual_cfg)
             model = build_model(
@@ -372,9 +393,9 @@ class ExperimentFacade:
                     top = [r for _, r in scored[: max(1, int(top_k))]]
                     models = []
                     for r in top:
-                        r_params = dict(r.get("params", {}))
-                        if model_name == "RandomForest" and r_params.get("bootstrap") is False:
-                            r_params["max_samples"] = None
+                        r_params = _normalize_model_params(
+                            model_name, r.get("params", {})
+                        )
                         r_residual_cfg = r.get("residual_cfg")
                         # Reuse already-fitted final model when same params + residual config.
                         if r_params == params and canon_cfg(r_residual_cfg) == residual_cfg_key:
