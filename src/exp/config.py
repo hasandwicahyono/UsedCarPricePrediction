@@ -56,6 +56,16 @@ class ExperimentConfig:
             {"kind": "None", "params": {}},
             {"kind": "ElasticNet", "params": {"alpha": 0.001, "l1_ratio": 0.5}},
             {"kind": "Huber", "params": {"epsilon": 1.35}},
+            {"kind": "FuzzyLogic", "params": {"n_rules": 5, "fuzziness": 2.0, "alpha": 0.001}},
+            {
+                "kind": "EvolutionaryStacking",
+                "params": {
+                    "max_iter": 20,
+                    "population_size": 8,
+                    "tree_max_depth": 3,
+                    "rf_n_estimators": 50,
+                },
+            },
             {
                 "kind": "PseudoHuber",
                 "params": {
@@ -75,6 +85,16 @@ class ExperimentConfig:
             {"kind": "None", "params": {}},
             {"kind": "ElasticNet", "params": {"alpha": 0.001, "l1_ratio": 0.5}},
             {"kind": "Huber", "params": {"epsilon": 1.35}},
+            {"kind": "FuzzyLogic", "params": {"n_rules": 5, "fuzziness": 2.0, "alpha": 0.001}},
+            {
+                "kind": "EvolutionaryStacking",
+                "params": {
+                    "max_iter": 20,
+                    "population_size": 8,
+                    "tree_max_depth": 3,
+                    "rf_n_estimators": 50,
+                },
+            },
             {
                 "kind": "PseudoHuber",
                 "params": {
@@ -94,6 +114,16 @@ class ExperimentConfig:
             {"kind": "None", "params": {}},
             {"kind": "ElasticNet", "params": {"alpha": 0.001, "l1_ratio": 0.5}},
             {"kind": "Huber", "params": {"epsilon": 1.35}},
+            {"kind": "FuzzyLogic", "params": {"n_rules": 5, "fuzziness": 2.0, "alpha": 0.001}},
+            {
+                "kind": "EvolutionaryStacking",
+                "params": {
+                    "max_iter": 20,
+                    "population_size": 8,
+                    "tree_max_depth": 3,
+                    "rf_n_estimators": 50,
+                },
+            },
             {
                 "kind": "PseudoHuber",
                 "params": {

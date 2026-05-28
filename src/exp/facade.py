@@ -20,9 +20,15 @@ from .policies import (
 )
 from .specs import PreprocessSpec
 from .evaluation import paired_tests, significance_matrix, DefaultEvaluator
-from .shap_analysis import ShapAnalyzer
 from .data_io import DataReadConfig, read_csv_folder, coerce_dtypes, basic_clean
+from .interpretability import ComplementaryExplainer
 from .plot_manager import PlotManager
+from .sensitivity import (
+    plot_hyperparameter_sensitivity,
+    save_hyperparameter_sensitivity,
+    summarize_hyperparameter_sensitivity,
+    trial_records_to_frame,
+)
 from .utils import model_label
 
 
@@ -143,6 +149,19 @@ class ExperimentFacade:
         self.model_names = list(model_names)
         self.evaluator = evaluator or DefaultEvaluator()
 
+    @staticmethod
+    def enable_intel_acceleration():
+        """
+        Enable Intel® Extension for Scikit-Learn to speed up 
+        classical ML algorithms (SVR, RandomForest, etc.)
+        """
+        try:
+            from sklearnex import patch_sklearn
+            patch_sklearn()
+            print("[info] Intel® Extension for Scikit-Learn (sklearnex) enabled.")
+        except ImportError:
+            print("[warning] sklearnex not found. Proceeding with standard scikit-learn.")
+
     def run(self):
         self.results_ = self.runner.run()
         self._save_best_hyperparams()
@@ -211,6 +230,32 @@ class ExperimentFacade:
         plot_manager.save_fig(fig, stem)
         return str(Path(out_dir) / f"{stem}.png")
 
+    def metric_comparison_plots(
+        self,
+        out_dir: str = "outputs/figures/metrics",
+        metrics: list[str] | None = None,
+        baseline: str = "RandomForest",
+        ci: float = 0.95,
+    ) -> dict[str, str]:
+        if self.results_ is None:
+            raise ValueError("No results available. Run the experiment first.")
+        metrics = metrics or [m.upper() for m in self.cfg.report_metrics if m.upper() in self.results_.columns]
+        lower_is_better = {
+            "R2": False,
+            "MAE": True,
+            "MEDAE": True,
+            "MSE": True,
+            "RMSE": True,
+        }
+        plot_manager = PlotManager(base_dir=out_dir, dpi=300, fmt="png", tight_layout=True)
+        return plot_manager.save_metric_comparison_plots(
+            self.results_,
+            metrics=metrics,
+            baseline=baseline,
+            ci=ci,
+            lower_is_better=lower_is_better,
+        )
+
     def _save_best_model_artifact(self, out_dir="outputs/artifacts"):
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -221,7 +266,7 @@ class ExperimentFacade:
 
         summary = (
             self.results_
-            .groupby("model")[metric]
+            .groupby("model", observed=False)[metric]
             .mean()
             .sort_values(ascending=ascending)
         )
@@ -303,7 +348,11 @@ class ExperimentFacade:
 
             # build preprocessing
             policy = get_preprocess_policy(model_name, DEFAULT_PREPROCESS_POLICY)
-            pre_key = (policy["cat_encoding"], bool(policy["use_feature_selection"]))
+            pre_key = (
+                policy["cat_encoding"],
+                bool(policy["use_feature_selection"]),
+                policy.get("feature_selection_method", "lasso"),
+            )
             if pre_key in pre_cache:
                 pre, Xp = pre_cache[pre_key]
             else:
@@ -312,6 +361,7 @@ class ExperimentFacade:
                     PreprocessSpec(
                         cat_encoding=policy["cat_encoding"],
                         use_feature_selection=policy["use_feature_selection"],
+                        feature_selection_method=policy.get("feature_selection_method", "lasso"),
                         seed=self.cfg.seed,
                     ),
                 )
@@ -334,15 +384,12 @@ class ExperimentFacade:
             model.fit(Xp, y)
 
             # save both
-            if model_name == "NeuralNetwork":
-                model.model.save(out_dir / f"{model_name}.keras")
-            else:   
-                label = model_name
-                if residual_cfg is not None and isinstance(residual_cfg, dict):
-                    kind = residual_cfg.get("kind")
-                    if kind:
-                        label = f"{model_name}+{kind}"
-                joblib.dump(model, out_dir / f"{label}.joblib")
+            label = model_name
+            if residual_cfg is not None and isinstance(residual_cfg, dict):
+                kind = residual_cfg.get("kind")
+                if kind:
+                    label = f"{model_name}+{kind}"
+            joblib.dump(model, out_dir / f"{label}.joblib")
             
             joblib.dump(pre, out_dir / f"{model_name}_preprocessor.joblib")
 
@@ -424,12 +471,69 @@ class ExperimentFacade:
     def significance_matrix(self, metric="MAE", models: list[str] | None = None):
         return self.evaluator.significance_matrix(self.runner.results_, metric=metric, models=models)
 
+    def optuna_trials(self) -> pd.DataFrame:
+        return trial_records_to_frame(self.runner.trial_records_)
+
+    def hyperparameter_sensitivity(
+        self,
+        out_dir: str = "outputs/sensitivity",
+        top_n: int = 20,
+        save: bool = True,
+    ) -> pd.DataFrame:
+        trials = self.optuna_trials()
+        if save:
+            _, summary, _ = save_hyperparameter_sensitivity(
+                trials,
+                out_dir=out_dir,
+                top_n=top_n,
+            )
+            return summary
+        return summarize_hyperparameter_sensitivity(trials)
+
+    def plot_hyperparameter_sensitivity(
+        self,
+        model: str | None = None,
+        top_n: int = 20,
+    ):
+        summary = summarize_hyperparameter_sensitivity(self.optuna_trials())
+        return plot_hyperparameter_sensitivity(summary, model=model, top_n=top_n)
+
+    def complementary_explainability(
+        self,
+        out_dir: str = "outputs/interpretability",
+        models: list[str] | None = None,
+        max_features: int = 8,
+        n_counterfactuals: int = 5,
+        max_entries_per_model: int | None = 2,
+        max_samples: int = 200,
+        grid_size: int = 20,
+        save: bool = True,
+    ):
+        explainer = ComplementaryExplainer(
+            self.runner.shap_store_,
+            seed=self.cfg.seed,
+            max_entries_per_model=max_entries_per_model,
+            max_samples=max_samples,
+            grid_size=grid_size,
+            models=models,
+        )
+        if save:
+            return explainer.save(
+                out_dir=out_dir,
+                models=models,
+                max_features=max_features,
+                n_counterfactuals=n_counterfactuals,
+            )
+        return explainer
+
     def shap(
         self,
         plot_dir: str = "outputs/figures/shap",
         models: list[str] | None = None,
         max_entries_per_model: int | None = None,
     ):
+        from .shap_analysis import ShapAnalyzer
+
         pm = PlotManager(base_dir=plot_dir)
         return ShapAnalyzer(
             self.runner.shap_store_,

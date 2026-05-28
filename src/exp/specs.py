@@ -34,6 +34,7 @@ class ModelSpec:
 class PreprocessSpec:
     cat_encoding: str = "onehot"
     use_feature_selection: bool = False
+    feature_selection_method: str = "lasso"
     te_smoothing: float = 10.0
     te_min_samples_leaf: int = 1
     te_noise_std: float = 0.0
@@ -48,6 +49,7 @@ class PreprocessSpec:
         return PreprocessSpec(
             cat_encoding=self.cat_encoding.strip().lower(),
             use_feature_selection=bool(self.use_feature_selection),
+            feature_selection_method=self.feature_selection_method.strip().lower(),
             te_smoothing=float(self.te_smoothing),
             te_min_samples_leaf=int(self.te_min_samples_leaf),
             te_noise_std=float(self.te_noise_std),
@@ -62,3 +64,5 @@ class PreprocessSpec:
     def validate(self) -> None:
         if self.cat_encoding not in {"onehot", "target", "raw"}:
             raise ValueError(f"Unknown cat_encoding: {self.cat_encoding}")
+        if self.feature_selection_method not in {"lasso", "genetic", "ga"}:
+            raise ValueError(f"Unknown feature_selection_method: {self.feature_selection_method}")

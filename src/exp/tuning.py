@@ -1,4 +1,5 @@
 import json
+import gc
 from typing import Dict, Any, Optional, Tuple, List
 from collections import defaultdict
 from uuid import uuid4
@@ -8,6 +9,7 @@ import numpy as np
 import pandas as pd
 import optuna
 from sklearn.model_selection import KFold
+import torch
 
 from .config import ExperimentConfig, FeatureSchema
 from .metrics import MetricStrategy
@@ -40,7 +42,12 @@ def suggest_from_space(
         pname = f"{name_prefix}{name}"
         t = spec["type"]
         if t == "int":
-            params[name] = trial.suggest_int(pname, spec["low"], spec["high"])
+            params[name] = trial.suggest_int(
+                pname,
+                spec["low"],
+                spec["high"],
+                step=spec.get("step", 1),
+            )
         elif t == "float":
             params[name] = trial.suggest_float(
                 pname, spec["low"], spec["high"], log=bool(spec.get("log", False))
@@ -78,7 +85,7 @@ def ensure_numeric_matrix(Xtr, Xva=None):
             Xva_d = Xva_d.reindex(columns=Xtr_d.columns, fill_value=0)
         else:
             Xva_d = None
-        return Xtr_d.to_numpy(), None if Xva_d is None else Xva_d.to_numpy()
+        return Xtr_d.to_numpy(dtype=float), None if Xva_d is None else Xva_d.to_numpy(dtype=float)
     # fallback: try to coerce numpy object array into DataFrame then dummies
     Xtr_df = pd.DataFrame(Xtr)
     Xtr_d = pd.get_dummies(Xtr_df, drop_first=False)
@@ -88,7 +95,7 @@ def ensure_numeric_matrix(Xtr, Xva=None):
         Xva_d = Xva_d.reindex(columns=Xtr_d.columns, fill_value=0)
     else:
         Xva_d = None
-    return Xtr_d.to_numpy(), None if Xva_d is None else Xva_d.to_numpy()
+    return Xtr_d.to_numpy(dtype=float), None if Xva_d is None else Xva_d.to_numpy(dtype=float)
 
 
 # ======================================================
@@ -279,7 +286,7 @@ class NestedCVRunner:
         inner_splitter: Optional[SplitStrategy] = None,
         observer: Optional[TuningObserver] = None,
     ):
-        self.df = df.copy()
+        self.df = df
         # sanitize columns
         self.df, self.column_mapping_ = sanitize_columns(self.df)
         # infer schema automatically
@@ -291,7 +298,7 @@ class NestedCVRunner:
         self.schema = FeatureSchema(
             target=target,
             num_cols=num_cols,
-            cat_cols=cat_cols
+            cat_cols=cat_cols,
         )
         self.cfg = cfg
         self.model_names = model_names
@@ -307,6 +314,7 @@ class NestedCVRunner:
         self.results_ = None
         self.best_params_records_ = []
         self.best_params_ = {}
+        self.trial_records_ = []
         self.shap_store_ = []
         self.feature_stability_ = []
         self.expanded_models = self._expand_models()
@@ -356,7 +364,7 @@ class NestedCVRunner:
         y = self.df[self.schema.target].astype(float).values
         self.y_price = y
         self.y_log = np.log(y.clip(min=1.0)) if self.cfg.log_target else y
-        self.X = self.df[self.schema.num_cols + self.schema.cat_cols].copy()
+        self.X = self.df[self.schema.num_cols + self.schema.cat_cols]
 
     def _create_study(self, seed: int, study_name: Optional[str] = None) -> optuna.Study:
         sampler = optuna.samplers.TPESampler(seed=seed)
@@ -369,6 +377,36 @@ class NestedCVRunner:
                                    sampler=sampler, 
                                    pruner=pruner,
                                    study_name=study_name)
+
+    def _record_study_trials(
+        self,
+        study: optuna.Study,
+        *,
+        model_name: str,
+        residual_cfg: Optional[dict],
+        outer_fold: int,
+    ) -> None:
+        residual_kind = "base"
+        if residual_cfg is not None:
+            residual_kind = residual_cfg.get("kind") or "base"
+        label = model_label(model_name, residual_cfg)
+
+        for trial in study.trials:
+            row = {
+                "study_name": study.study_name,
+                "outer_fold": outer_fold,
+                "model": label,
+                "base_model": model_name,
+                "residual_kind": residual_kind,
+                "trial_number": trial.number,
+                "state": trial.state.name,
+                "metric": self.metric.name,
+                "direction": self.metric.direction,
+                "value": trial.value,
+            }
+            for pname, pvalue in trial.params.items():
+                row[f"param__{pname}"] = pvalue
+            self.trial_records_.append(row)
 
     def _inner_objective(
         self,
@@ -393,6 +431,11 @@ class NestedCVRunner:
         params = {**fixed, **suggest_from_space(trial, search)}
         if model_name == "RandomForest" and params.get("bootstrap") is False:
             params["max_samples"] = None
+
+        if model_name == "FTTransformer":
+            input_dim, n_heads = params.get("input_dim"), params.get("n_heads")
+            if input_dim is not None and n_heads is not None and input_dim % n_heads != 0:
+                raise optuna.TrialPruned(f"FTTransformer: input_dim ({input_dim}) must be divisible by n_heads ({n_heads})")
 
         self.observer.on_trial_start(
             RunContext(
@@ -513,7 +556,20 @@ class NestedCVRunner:
                 trial.report(metric_as_loss(score), step)
                 if trial.should_prune():
                     stopping_policy.on_trial_pruned()
+                    del model
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    elif hasattr(torch, "mps") and torch.backends.mps.is_available():
+                        torch.mps.empty_cache()
                     raise optuna.TrialPruned()
+            
+            del model
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif hasattr(torch, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
     
         trial.set_user_attr("residual_cfg", residual_cfg_use if residual_cfg_use else None)
         return float(np.mean(scores)) #float(np.mean(maes))
@@ -557,9 +613,10 @@ class NestedCVRunner:
             fold_seed = self.cfg.seed + ofold
 
             pre_cache = {}
-            outer_interaction_cache = {}
             inner_folds_by_model = {}
             inner_interaction_cache_by_model = {}
+            outer_interaction_cache = {}
+
             for model_name, residual_cfg in self.expanded_models:
                 fixed, search = self.space.get(model_name)
                 fixed_r: Dict[str, Any] = {}
@@ -636,7 +693,26 @@ class NestedCVRunner:
                     n_trials=self.cfg.n_trials,
                     timeout=self.cfg.timeout_sec,
                     callbacks=[callback],
+                    show_progress_bar=False,
                 )
+                self._record_study_trials(
+                    study,
+                    model_name=model_name,
+                    residual_cfg=residual_cfg,
+                    outer_fold=ofold,
+                )
+                
+                # Memory Management: Clear model-specific caches after tuning is done
+                if self.cfg.preprocessing_cache:
+                    keys_to_del = [
+                        k for k in pre_cache 
+                        if (isinstance(k, str) and k.startswith(f"{model_name}_")) or
+                           (isinstance(k, tuple) and len(k) > 0 and k[0] == model_name)
+                    ]
+                    for k in keys_to_del:
+                        del pre_cache[k]
+                if model_name in inner_interaction_cache_by_model:
+                    inner_interaction_cache_by_model[model_name].clear()
 
                 has_complete_trial = any(
                     t.state == optuna.trial.TrialState.COMPLETE for t in study.trials
@@ -775,6 +851,15 @@ class NestedCVRunner:
                         feature_names=feature_names,
                     )
                 )
+                
+                # Explicit cleanup after retraining
+                del model
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                elif hasattr(torch, "mps") and torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+
             self.observer.on_outer_fold_end(
                 RunContext(run_id=self.run_id, outer_fold=ofold)
             )

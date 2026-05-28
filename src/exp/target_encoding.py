@@ -40,7 +40,7 @@ class LeakageSafeTargetEncoder(BaseEstimator, TransformerMixin):
 
         self.mapping_.clear()
         for c in self.cols:
-            stats = y_series.groupby(X[c]).agg(["count", "mean"])
+            stats = y_series.groupby(X[c], observed=False).agg(["count", "mean"])
 
             # smoothing:
             # enc = (count*mean + smoothing*global) / (count + smoothing)

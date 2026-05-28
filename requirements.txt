@@ -284,6 +284,7 @@ tokenizers==0.22.2
 toml==0.10.2
 toolz==1.1.0
 torch==2.9.0
+pytorch-tabnet
 tornado==6.5.1
 tpu-info==0.8.1
 tqdm==4.67.3

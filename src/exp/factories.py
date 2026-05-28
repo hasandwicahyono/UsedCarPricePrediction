@@ -67,6 +67,7 @@ def build_preprocessor(schema: FeatureSchema, spec: Optional[PreprocessSpec] = N
     return builder.build(
         cat_encoding=spec.cat_encoding,
         use_feature_selection=spec.use_feature_selection,
+        feature_selection_method=spec.feature_selection_method,
         te_smoothing=spec.te_smoothing,
         te_min_samples_leaf=spec.te_min_samples_leaf,
         te_noise_std=spec.te_noise_std,

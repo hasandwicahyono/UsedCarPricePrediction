@@ -5,10 +5,14 @@ from pathlib import Path
 import csv
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, PowerTransformer, StandardScaler, FunctionTransformer
+from sklearn.preprocessing import OneHotEncoder, PowerTransformer, StandardScaler, FunctionTransformer, QuantileTransformer
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_selection import SelectFromModel
 from sklearn.linear_model import LassoCV, ElasticNetCV
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import Ridge
+from joblib import Parallel, delayed
 
 from .config import FeatureSchema
 from .target_encoding import LeakageSafeTargetEncoder
@@ -179,6 +183,108 @@ class SafePowerTransformer(BaseEstimator, TransformerMixin):
         return np.asarray(self._good_names, dtype=object)
 
 
+class GeneticFeatureSelector(BaseEstimator, TransformerMixin):
+    """
+    Lightweight genetic algorithm for numeric feature subset selection.
+    Fitness combines validation MSE from a ridge model with a subset-size penalty.
+    """
+
+    def __init__(
+        self,
+        population_size: int = 24,
+        generations: int = 20,
+        mutation_rate: float = 0.05,
+        crossover_rate: float = 0.8,
+        subset_penalty: float = 0.01,
+        validation_fraction: float = 0.25,
+        random_state: int = 42,
+    ):
+        self.population_size = population_size
+        self.generations = generations
+        self.mutation_rate = mutation_rate
+        self.crossover_rate = crossover_rate
+        self.subset_penalty = subset_penalty
+        self.validation_fraction = validation_fraction
+        self.random_state = random_state
+
+    def fit(self, X, y=None):
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y, dtype=float).reshape(-1)
+        n_features = X.shape[1]
+        self.n_features_in_ = n_features
+        if n_features <= 1 or X.shape[0] < 8:
+            self.support_ = np.ones(n_features, dtype=bool)
+            return self
+
+        rng = np.random.default_rng(self.random_state)
+        Xtr, Xva, ytr, yva = train_test_split(
+            X,
+            y,
+            test_size=self.validation_fraction,
+            random_state=self.random_state,
+        )
+
+        pop_size = max(4, int(self.population_size))
+        population = rng.random((pop_size, n_features)) < 0.5
+        population[0, :] = True
+        for row in population:
+            if not row.any():
+                row[rng.integers(0, n_features)] = True
+
+        def fitness(mask):
+            if not mask.any():
+                return np.inf
+            model = Ridge(alpha=1.0)
+            model.fit(Xtr[:, mask], ytr)
+            pred = model.predict(Xva[:, mask])
+            mse = mean_squared_error(yva, pred)
+            return float(mse + self.subset_penalty * (mask.mean()))
+
+        # Parallelize fitness evaluation across CPU cores
+        scores = np.array(Parallel(n_jobs=-1, require="sharedmem")(delayed(fitness)(mask) for mask in population))
+        for _ in range(max(1, int(self.generations))):
+            elite = population[np.argmin(scores)].copy()
+            new_pop = [elite]
+            while len(new_pop) < pop_size:
+                p1 = self._tournament(population, scores, rng)
+                p2 = self._tournament(population, scores, rng)
+                c1, c2 = p1.copy(), p2.copy()
+                if rng.random() < self.crossover_rate and n_features > 1:
+                    point = rng.integers(1, n_features)
+                    c1 = np.r_[p1[:point], p2[point:]]
+                    c2 = np.r_[p2[:point], p1[point:]]
+                for child in (c1, c2):
+                    flips = rng.random(n_features) < self.mutation_rate
+                    child[flips] = ~child[flips]
+                    if not child.any():
+                        child[rng.integers(0, n_features)] = True
+                    new_pop.append(child)
+                    if len(new_pop) >= pop_size:
+                        break
+            population = np.asarray(new_pop, dtype=bool)
+            scores = np.array(Parallel(n_jobs=-1, require="sharedmem")(delayed(fitness)(mask) for mask in population))
+
+        self.support_ = population[np.argmin(scores)].astype(bool)
+        return self
+
+    @staticmethod
+    def _tournament(population, scores, rng, k: int = 3):
+        k = min(k, len(population))
+        idx = rng.choice(len(population), size=k, replace=False)
+        return population[idx[np.argmin(scores[idx])]]
+
+    def transform(self, X):
+        return np.asarray(X)[:, self.support_]
+
+    def get_support(self):
+        return self.support_
+
+    def get_feature_names_out(self, input_features=None):
+        if input_features is None:
+            input_features = [f"feature_{i}" for i in range(self.n_features_in_)]
+        return np.asarray(input_features, dtype=object)[self.support_]
+
+
 class PreprocessorBuilder:
     def __init__(self, schema: FeatureSchema):
         self.schema = schema
@@ -188,6 +294,7 @@ class PreprocessorBuilder:
         *,
         cat_encoding: str = "onehot",      # "onehot" or "target"
         use_feature_selection: bool = False,
+        feature_selection_method: str = "lasso",
         te_smoothing: float = 10.0,
         te_min_samples_leaf: int = 1,
         te_noise_std: float = 0.0,
@@ -199,34 +306,44 @@ class PreprocessorBuilder:
         trial_id: int | None = None,
     ) -> ColumnTransformer:
         
-        # numeric pipeline (optionally with ElasticNet FS)
+        feature_selection_method = str(feature_selection_method or "lasso").lower()
+
+        # Strategy: Tabular DL models benefit significantly from RankGauss (QuantileTransformer)
+        # which maps numeric data to a normal distribution, reducing the impact of outliers.
+        numeric_transformer = SafePowerTransformer(method="yeo-johnson",
+                                                   run_id=run_id,
+                                                   outer_fold=outer_fold,
+                                                   inner_fold=inner_fold,
+                                                   model_name=model_name,
+                                                   trial_id=trial_id)
+        if model_name in {"TabNet", "FTTransformer", "NeuralNetwork"}:
+             numeric_transformer = QuantileTransformer(output_distribution='normal', random_state=seed)
+
+        # numeric pipeline (optionally with feature selection)
         num_steps = [
-            (
-                "yeo",
-                SafePowerTransformer(
-                    method="yeo-johnson",
-                    run_id=run_id,
-                    outer_fold=outer_fold,
-                    inner_fold=inner_fold,
-                    model_name=model_name,
-                    trial_id=trial_id,
-                ),
-            ),
+            ("numeric_transform", numeric_transformer),
             ("scaler", StandardScaler()),
         ]
 
         if use_feature_selection:
-            num_steps.append(
-                ("lasso", SelectFromModel(
-                    LassoCV(
-                        alphas=np.logspace(-4, 1, 50),
-                        cv=10,
-                        max_iter=20000,
-                        n_jobs=-1
-                    ),
-                    threshold="median"
-                ))
-            )
+            if feature_selection_method == "lasso":
+                num_steps.append(
+                    ("lasso", SelectFromModel(
+                        LassoCV(
+                            alphas=np.logspace(-4, 1, 50),
+                            cv=10,
+                            max_iter=20000,
+                            n_jobs=-1
+                        ),
+                        threshold="median"
+                    ))
+                )
+            elif feature_selection_method in {"genetic", "ga"}:
+                num_steps.append(
+                    ("genetic", GeneticFeatureSelector(random_state=seed))
+                )
+            else:
+                raise ValueError(f"Unknown feature_selection_method: {feature_selection_method}")
 
         if cat_encoding == "raw":
             num_pipe = Pipeline([("identity", make_identity_transformer()),])
@@ -238,7 +355,7 @@ class PreprocessorBuilder:
                                      remainder="drop",
                                      verbose_feature_names_out=False)
     
-        num_pipe = Pipeline(num_steps)
+        num_pipe = Pipeline(num_steps, memory="cache_directory")
         # categorical pipeline
         if cat_encoding == "onehot":
             cat_pipe = make_ohe()
