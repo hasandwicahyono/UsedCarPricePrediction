@@ -27,6 +27,21 @@ The notebook demonstrates the full pipeline:
 
 The package under `src/exp/` can also be used directly in Python through `ExperimentFacade` and related configuration classes.
 
+Residual stacking comparisons include classical robust residual learners
+(`ElasticNet`, `Huber`, `PseudoHuber`) and AI-oriented alternatives:
+`FuzzyLogic` residual correction and `EvolutionaryStacking` residual blending.
+
+Explainability combines SHAP with complementary model-agnostic diagnostics:
+partial dependence plots and one-feature counterfactual searches in the
+transformed feature space.
+
+Feature selection can use the existing LASSO selector or an evolutionary genetic
+algorithm selector. The GA selector optimizes numeric feature subsets using a
+validation-score fitness function with a subset-size penalty.
+
+Metric visualizations include point-range plots, confidence intervals, and
+baseline-delta comparisons to make model differences easier to read.
+
 ## Installation
 
 Create a virtual environment and install dependencies:
@@ -103,6 +118,31 @@ Running experiments produces artifacts such as:
 - plots in `outputs/figures/`
 - selected parameters in `outputs/best_params/` and `outputs/hyperparameters/`
 - model artifacts in `outputs/artifacts/`
+- Optuna trial history and hyperparameter sensitivity summaries in `outputs/sensitivity/`
+
+After `exp.run()`, save sensitivity artifacts with:
+
+```python
+sensitivity = exp.hyperparameter_sensitivity()
+```
+
+Complementary interpretability artifacts can be saved after `exp.run()` with:
+
+```python
+exp.complementary_explainability()
+```
+
+To use evolutionary feature selection for a model policy, set:
+
+```python
+PREPROCESS_POLICIES["LinearRegression"]["feature_selection_method"] = "genetic"
+```
+
+Publication-style metric figures can be regenerated after `exp.run()` with:
+
+```python
+exp.metric_comparison_plots(baseline="RandomForest")
+```
 
 ## Notes
 

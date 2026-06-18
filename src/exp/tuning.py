@@ -435,7 +435,8 @@ class NestedCVRunner:
         if model_name == "FTTransformer":
             input_dim, n_heads = params.get("input_dim"), params.get("n_heads")
             if input_dim is not None and n_heads is not None and input_dim % n_heads != 0:
-                raise optuna.TrialPruned(f"FTTransformer: input_dim ({input_dim}) must be divisible by n_heads ({n_heads})")
+                # Coerce input_dim to be divisible by n_heads instead of pruning to save the trial
+                params["input_dim"] = max(n_heads, int(round(input_dim / n_heads)) * n_heads)
 
         self.observer.on_trial_start(
             RunContext(

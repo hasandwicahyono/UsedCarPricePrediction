@@ -402,6 +402,12 @@ class FTTransformerStrategy(ModelStrategy):
         m_keys = {'n_blocks', 'n_heads', 'input_dim', 'ff_hidden_multiplier', 'attn_dropout', 'ff_dropout'}
         m_params = {k: self.params.get(k) for k in m_keys if k in self.params}
         
+        # Ensure input_dim is divisible by n_heads to prevent WideDeep assertion failures
+        if "input_dim" in m_params and "n_heads" in m_params:
+            in_dim, heads = m_params["input_dim"], m_params["n_heads"]
+            if in_dim % heads != 0:
+                m_params["input_dim"] = max(heads, int(round(in_dim / heads)) * heads)
+
         ft_backbone = FTTransformer(
             column_idx={col: i for i, col in enumerate(cols)},
             cat_embed_input=[], 

@@ -1,4 +1,4 @@
-{
+ {
   "global": {
     "n_trials": 40,
     "timeout_sec": null

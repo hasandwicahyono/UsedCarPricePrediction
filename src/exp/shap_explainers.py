@@ -71,8 +71,44 @@ class KernelShapExplainer(BaseShapExplainer):
 
     def __init__(self, model, X_background):
         super().__init__(model, X_background)
+
+        if hasattr(model, "predict"):
+            predict_fn = model.predict
+        elif callable(model):
+            def predict_fn(x):
+                import numpy as np
+                try:
+                    import torch
+                    if isinstance(model, torch.nn.Module):
+                        model.eval()
+                        device = next(model.parameters()).device
+                        with torch.no_grad():
+                            x_tensor = torch.tensor(np.asarray(x), dtype=torch.float32).to(device)
+                            
+                            if type(model).__name__ == "WideDeep":
+                                x_in = {}
+                                for comp in ["wide", "deeptabular", "deeptext", "deepimage"]:
+                                    if getattr(model, comp, None) is not None:
+                                        x_in[comp] = x_tensor
+                                if not x_in:
+                                    x_in["deeptabular"] = x_tensor
+                                out = model(x_in)
+                            else:
+                                out = model(x_tensor)
+                                
+                            if isinstance(out, torch.Tensor):
+                                return out.cpu().numpy()
+                            if isinstance(out, (tuple, list)) and isinstance(out[0], torch.Tensor):
+                                return out[0].cpu().numpy()
+                            return np.asarray(out)
+                except ImportError:
+                    pass
+                return np.asarray(model(x))
+        else:
+            predict_fn = model
+
         self.explainer = shap.KernelExplainer(
-            model.predict,
+            predict_fn,
             X_background
         )
 
