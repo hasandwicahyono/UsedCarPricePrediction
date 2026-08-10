@@ -1,77 +1,104 @@
-import os
-import random
 import json
+import gc
+import warnings
+# Suppress XGBoost mismatched devices warnings to keep stdout clean
+warnings.filterwarnings("ignore", category=UserWarning, module="xgboost.core")
 from typing import Dict, Any, Optional, Tuple, List
 from collections import defaultdict
+from uuid import uuid4
 
+from .models import ModelFactory
 import numpy as np
 import pandas as pd
 import optuna
 from sklearn.model_selection import KFold
-from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error, median_absolute_error
+import torch
 
 from .config import ExperimentConfig, FeatureSchema
-from .preprocess import PreprocessorBuilder
-from .models import ModelFactory
 from .metrics import MetricStrategy
-from .metrics import make_metric
+from .registry import METRIC_REGISTRY
+from .factories import (
+    build_metric,
+    build_model,
+    build_preprocessor,
+    get_preprocess_policy,
+    get_interaction_policy,
+    #get_model_names,
+)
 from .schema_utils import sanitize_columns, infer_schema
-import re
+from .utils import build_monotone_constraints, make_pre_cache_key, model_label, set_seed
+from .policies import DEFAULT_PREPROCESS_POLICY
+from .specs import PreprocessSpec
+from .patterns import RunContext, SplitStrategy, TuningObserver
+from .interaction_features import add_interaction_features
 
 # ======================================================
 # Utilities
 # ======================================================
-
-def build_monotone_constraints(feature_names: list[str]) -> str:
-    """
-    Define monotonicity assumptions here.
-    +1  increasing
-    -1  decreasing
-     0  unconstrained
-    """
-
-    constraints = []
-
-    for f in feature_names:
-        if re.search(r"mileage|odometer|km", f, re.I):
-            constraints.append(-1)
-        elif re.search(r"year", f, re.I):
-            constraints.append(+1)
-        elif re.search(r"engine|displacement", f, re.I):
-            constraints.append(+1)
-        else:
-            constraints.append(0)
-
-    return "(" + ",".join(map(str, constraints)) + ")"
-
-
-def set_seed(seed: int):
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    random.seed(seed)
-    np.random.seed(seed)
-
-
-def suggest_from_space(trial: optuna.Trial, space: Dict[str, Any]) -> Dict[str, Any]:
+def suggest_from_space(
+    trial: optuna.Trial,
+    space: Dict[str, Any],
+    name_prefix: str = "",
+) -> Dict[str, Any]:
     params = {}
     for name, spec in space.items():
+        pname = f"{name_prefix}{name}"
         t = spec["type"]
         if t == "int":
-            params[name] = trial.suggest_int(name, spec["low"], spec["high"])
+            params[name] = trial.suggest_int(
+                pname,
+                spec["low"],
+                spec["high"],
+                step=spec.get("step", 1),
+            )
         elif t == "float":
             params[name] = trial.suggest_float(
-                name, spec["low"], spec["high"], log=bool(spec.get("log", False))
+                pname, spec["low"], spec["high"], log=bool(spec.get("log", False))
             )
         elif t == "categorical":
-            params[name] = trial.suggest_categorical(name, spec["choices"])
+            params[name] = trial.suggest_categorical(pname, spec["choices"])
         else:
             raise ValueError(f"Unsupported hyperparameter type: {t}")
     return params
 
 
-def model_label(name, residual_cfg):
-    if residual_cfg is None:
-        return name
-    return f"{name}+{residual_cfg['kind']}"
+def ensure_numeric_matrix(Xtr, Xva=None):
+    """
+    Ensure X matrices are numeric for models like XGBoost.
+    If object dtypes are found, fall back to pandas.get_dummies and align columns.
+    """
+    if hasattr(Xtr, "dtype") and Xtr.dtype != object:
+        return Xtr, Xva
+    if isinstance(Xtr, pd.DataFrame):
+        # Fast path: fully numeric DataFrame does not need expensive get_dummies.
+        if all(pd.api.types.is_numeric_dtype(dt) for dt in Xtr.dtypes):
+            Xtr_num = Xtr.to_numpy()
+            if Xva is None:
+                return Xtr_num, None
+            if isinstance(Xva, pd.DataFrame):
+                # Keep deterministic alignment in case validation columns differ/order shifts.
+                Xva_num = Xva.reindex(columns=Xtr.columns, fill_value=0).to_numpy()
+            else:
+                Xva_num = np.asarray(Xva)
+            return Xtr_num, Xva_num
+
+        Xtr_d = pd.get_dummies(Xtr, drop_first=False)
+        if Xva is not None:
+            Xva_d = pd.get_dummies(Xva, drop_first=False)
+            Xva_d = Xva_d.reindex(columns=Xtr_d.columns, fill_value=0)
+        else:
+            Xva_d = None
+        return Xtr_d.to_numpy(dtype=float), None if Xva_d is None else Xva_d.to_numpy(dtype=float)
+    # fallback: try to coerce numpy object array into DataFrame then dummies
+    Xtr_df = pd.DataFrame(Xtr)
+    Xtr_d = pd.get_dummies(Xtr_df, drop_first=False)
+    if Xva is not None:
+        Xva_df = pd.DataFrame(Xva)
+        Xva_d = pd.get_dummies(Xva_df, drop_first=False)
+        Xva_d = Xva_d.reindex(columns=Xtr_d.columns, fill_value=0)
+    else:
+        Xva_d = None
+    return Xtr_d.to_numpy(dtype=float), None if Xva_d is None else Xva_d.to_numpy(dtype=float)
 
 
 # ======================================================
@@ -90,6 +117,12 @@ class HyperparamSpace:
             return {}, {}
         m = self.cfg["models"].get(model_name, {})
         return dict(m.get("fixed", {})), dict(m.get("search", {}))
+
+    def get_residual(self, model_name: str, residual_kind: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        if self.cfg is None:
+            return {}, {}
+        r = self.cfg.get("residuals", {}).get(model_name, {}).get(residual_kind, {})
+        return dict(r.get("fixed", {})), dict(r.get("search", {}))
 
     def global_trials(self) -> Optional[int]:
         return self.cfg.get("global", {}).get("n_trials") if self.cfg else None
@@ -194,13 +227,48 @@ class CoverageAwareEarlyStoppingPolicy:
 
 
 class OptunaStoppingCallback:
-    def __init__(self, policy: CoverageAwareEarlyStoppingPolicy):
+    def __init__(self, policy: CoverageAwareEarlyStoppingPolicy, observer: TuningObserver, base_ctx: RunContext):
         self.policy = policy
+        self.observer = observer
+        self.base_ctx = base_ctx
 
     def __call__(self, study, trial):
         self.policy.on_trial_complete(study, trial)
+        self.observer.on_trial_end(
+            RunContext(
+                run_id=self.base_ctx.run_id,
+                outer_fold=self.base_ctx.outer_fold,
+                inner_fold=self.base_ctx.inner_fold,
+                model_name=self.base_ctx.model_name,
+                trial_id=trial.number,
+            ),
+            trial.value,
+        )
         if self.policy.should_stop():
             study.stop()
+
+
+class KFoldSplitStrategy(SplitStrategy):
+    def __init__(self, n_splits: int):
+        self.n_splits = int(n_splits)
+
+    def split(self, X: pd.DataFrame, y: Optional[np.ndarray], seed: int):
+        cv = KFold(n_splits=self.n_splits, shuffle=True, random_state=seed)
+        return cv.split(X)
+
+
+class NullTuningObserver(TuningObserver):
+    def on_outer_fold_start(self, ctx: RunContext) -> None:
+        return None
+
+    def on_outer_fold_end(self, ctx: RunContext) -> None:
+        return None
+
+    def on_trial_start(self, ctx: RunContext) -> None:
+        return None
+
+    def on_trial_end(self, ctx: RunContext, score: Optional[float]) -> None:
+        return None
 
 
 # ======================================================
@@ -215,8 +283,13 @@ class NestedCVRunner:
         cfg: ExperimentConfig,
         model_names: List[str],
         hparam_json: Optional[str] = None,
+        metric: Optional[MetricStrategy] = None,
+        preprocessor_builder: Optional[object] = None,
+        outer_splitter: Optional[SplitStrategy] = None,
+        inner_splitter: Optional[SplitStrategy] = None,
+        observer: Optional[TuningObserver] = None,
     ):
-        self.df = df.copy()
+        self.df = df
         # sanitize columns
         self.df, self.column_mapping_ = sanitize_columns(self.df)
         # infer schema automatically
@@ -228,7 +301,7 @@ class NestedCVRunner:
         self.schema = FeatureSchema(
             target=target,
             num_cols=num_cols,
-            cat_cols=cat_cols
+            cat_cols=cat_cols,
         )
         self.cfg = cfg
         self.model_names = model_names
@@ -244,13 +317,33 @@ class NestedCVRunner:
         self.results_ = None
         self.best_params_records_ = []
         self.best_params_ = {}
+        self.trial_records_ = []
         self.shap_store_ = []
         self.feature_stability_ = []
         self.expanded_models = self._expand_models()
 
-        self.metric = make_metric(self.cfg.metric_name)
+        self.metric = metric or build_metric(self.cfg.metric_name)
+        self.outer_splitter = outer_splitter or KFoldSplitStrategy(self.cfg.outer_folds)
+        self.inner_splitter = inner_splitter or KFoldSplitStrategy(self.cfg.inner_folds)
+        self.observer = observer or NullTuningObserver()
+        if preprocessor_builder is None:
+            self._preprocessor_factory = lambda spec: build_preprocessor(self.schema, spec)
+        else:
+            self._preprocessor_factory = lambda spec: preprocessor_builder.build(
+                cat_encoding=spec.cat_encoding,
+                use_feature_selection=spec.use_feature_selection,
+                te_smoothing=spec.te_smoothing,
+                te_min_samples_leaf=spec.te_min_samples_leaf,
+                te_noise_std=spec.te_noise_std,
+                seed=spec.seed,
+                run_id=spec.run_id,
+                outer_fold=spec.outer_fold,
+                inner_fold=spec.inner_fold,
+                model_name=spec.model_name,
+                trial_id=spec.trial_id,
+            )
 
-        valid_models = set(ModelFactory.MAP.keys())
+        valid_models = set(ModelFactory.MAP.keys()) #set(get_model_names())
         unknown = set(self.model_names) - valid_models
         if unknown:
             raise ValueError(f"Unknown model names: {unknown}")
@@ -263,14 +356,18 @@ class NestedCVRunner:
                 expanded.append((m, None))
             else:
                 for r in residuals:
-                    expanded.append((m, r))
+                    kind = None if r is None else r.get("kind")
+                    if kind is None or (isinstance(kind, str) and kind.strip().lower() == "none"):
+                        expanded.append((m, None))
+                    else:
+                        expanded.append((m, r))
         return expanded
 
     def _prepare_xy(self):
         y = self.df[self.schema.target].astype(float).values
         self.y_price = y
         self.y_log = np.log(y.clip(min=1.0)) if self.cfg.log_target else y
-        self.X = self.df[self.schema.num_cols + self.schema.cat_cols].copy()
+        self.X = self.df[self.schema.num_cols + self.schema.cat_cols]
 
     def _create_study(self, seed: int, study_name: Optional[str] = None) -> optuna.Study:
         sampler = optuna.samplers.TPESampler(seed=seed)
@@ -284,102 +381,237 @@ class NestedCVRunner:
                                    pruner=pruner,
                                    study_name=study_name)
 
+    def _record_study_trials(
+        self,
+        study: optuna.Study,
+        *,
+        model_name: str,
+        residual_cfg: Optional[dict],
+        outer_fold: int,
+    ) -> None:
+        residual_kind = "base"
+        if residual_cfg is not None:
+            residual_kind = residual_cfg.get("kind") or "base"
+        label = model_label(model_name, residual_cfg)
+
+        for trial in study.trials:
+            row = {
+                "study_name": study.study_name,
+                "outer_fold": outer_fold,
+                "model": label,
+                "base_model": model_name,
+                "residual_kind": residual_kind,
+                "trial_number": trial.number,
+                "state": trial.state.name,
+                "metric": self.metric.name,
+                "direction": self.metric.direction,
+                "value": trial.value,
+            }
+            for pname, pvalue in trial.params.items():
+                row[f"param__{pname}"] = pvalue
+            self.trial_records_.append(row)
+
     def _inner_objective(
         self,
         trial: optuna.Trial,
         model_name: str,
+        policy: Dict[str, Any],
+        interaction_policy: str,
+        fixed: Dict[str, Any],
+        search: Dict[str, Any],
+        fixed_r: Dict[str, Any],
+        search_r: Dict[str, Any],
         residual_cfg: Optional[dict],
-        X_train: pd.DataFrame,
-        y_train_log: np.ndarray,
-        y_train_price: np.ndarray,
         seed: int,
+        outer_fold: int,
+        run_id: str,
+        inner_folds: List[Dict[str, Any]],
         pre_cache: dict,
+        interaction_cache: dict,
         stopping_policy: CoverageAwareEarlyStoppingPolicy,
     ) -> float:
 
-        fixed, search = self.space.get(model_name)
         params = {**fixed, **suggest_from_space(trial, search)}
+        if model_name == "RandomForest" and params.get("bootstrap") is False:
+            params["max_samples"] = None
 
-        inner_cv = KFold(
-            n_splits=self.cfg.inner_folds,
-            shuffle=True,
-            random_state=seed,
+        if model_name == "FTTransformer":
+            input_dim, n_heads = params.get("input_dim"), params.get("n_heads")
+            if input_dim is not None and n_heads is not None and input_dim % n_heads != 0:
+                # Coerce input_dim to be divisible by n_heads instead of pruning to save the trial
+                params["input_dim"] = max(n_heads, int(round(input_dim / n_heads)) * n_heads)
+
+        self.observer.on_trial_start(
+            RunContext(
+                run_id=run_id,
+                outer_fold=outer_fold,
+                model_name=model_name,
+                trial_id=trial.number,
+            )
         )
 
-        builder = PreprocessorBuilder(self.schema)
-        default_policy = dict(cat_encoding="onehot", use_feature_selection=False)
-        scores = []
-        for step, (tr, va) in enumerate(inner_cv.split(X_train)):
-            Xtr_raw = X_train.iloc[tr]
-            Xva_raw = X_train.iloc[va]
-            ytr = y_train_log[tr]
-            yva = y_train_log[va]
-            yva_price = y_train_price[va]
+        residual_cfg_use = residual_cfg
+        if residual_cfg is not None:
+            residual_cfg_use = dict(residual_cfg)
+            residual_params = dict(residual_cfg.get("params", {}))
+            residual_params.update(fixed_r)
+            residual_params.update(
+                suggest_from_space(
+                    trial,
+                    search_r,
+                    name_prefix=f"residual__{residual_cfg['kind']}__",
+                )
+            )
+            residual_cfg_use["params"] = residual_params
 
-            # key = hash(tr.tobytes())
-            key = (model_name, seed, tuple(tr))
+        scores = []
+        supports_pruning = self.metric.supports_pruning()
+        metric_compute = self.metric.compute
+        metric_as_loss = self.metric.as_loss
+        direction = self.metric.direction
+        for fold in inner_folds:
+            step = fold["step"]
+            Xtr_raw = fold["Xtr_raw"]
+            Xva_raw = fold["Xva_raw"]
+            ytr = fold["ytr"]
+            yva = fold["yva"]
+            yva_price = fold["yva_price"]
+            key = fold["pre_key"]
             if self.cfg.preprocessing_cache and key in pre_cache:
                 pre, Xtr, Xva = pre_cache[key]
             else:
-                policy = getattr(ModelFactory.MAP[model_name], "preprocess_policy", default_policy)
-                pre = builder.build(
-                    cat_encoding=policy["cat_encoding"],
-                    use_feature_selection=policy["use_feature_selection"],
-                    seed=seed
-                )
-                Xtr = pre.fit_transform(Xtr_raw, ytr)
-                Xva = pre.transform(Xva_raw)
+                Xtr_use = Xtr_raw
+                Xva_use = Xva_raw
+                schema_use = self.schema
+                if interaction_policy != "none":
+                    if key in interaction_cache:
+                        Xtr_use, Xva_use, schema_use = interaction_cache[key]
+                    else:
+                        Xtr_use, add_num, add_cat = add_interaction_features(Xtr_raw, interaction_policy)
+                        Xva_use, _, _ = add_interaction_features(Xva_raw, interaction_policy)
+                        schema_use = FeatureSchema(
+                            target=self.schema.target,
+                            num_cols=self.schema.num_cols + add_num,
+                            cat_cols=self.schema.cat_cols + add_cat,
+                        )
+                        interaction_cache[key] = (Xtr_use, Xva_use, schema_use)
+                    pre = build_preprocessor(
+                        schema_use,
+                        PreprocessSpec(
+                            cat_encoding=policy["cat_encoding"],
+                            use_feature_selection=policy["use_feature_selection"],
+                            seed=seed,
+                            run_id=run_id,
+                            outer_fold=outer_fold,
+                            inner_fold=step,
+                            model_name=model_name,
+                            trial_id=trial.number,
+                        ),
+                    )
+                else:
+                    pre = self._preprocessor_factory(
+                        PreprocessSpec(
+                            cat_encoding=policy["cat_encoding"],
+                            use_feature_selection=policy["use_feature_selection"],
+                            seed=seed,
+                            run_id=run_id,
+                            outer_fold=outer_fold,
+                            inner_fold=step,
+                            model_name=model_name,
+                            trial_id=trial.number,
+                        )
+                    )
+                Xtr = pre.fit_transform(Xtr_use, ytr)
+                Xva = pre.transform(Xva_use)
+                if model_name == "XGBoost":
+                    Xtr, Xva = ensure_numeric_matrix(Xtr, Xva)
+
                 if self.cfg.preprocessing_cache:
                     pre_cache[key] = (pre, Xtr, Xva)
 
-            model = ModelFactory.create(
-                model_name, 
-                seed=seed, 
+            model = build_model(
+                model_name,
+                seed=seed,
                 params=params,
-                residual_cfgs=[residual_cfg] if residual_cfg else None
+                residual_cfgs=[residual_cfg_use] if residual_cfg_use else None,
             )
+            if model_name == "XGBoost" and not self.cfg.preprocessing_cache:
+                Xtr, Xva = ensure_numeric_matrix(Xtr, Xva)
             model.fit(Xtr, ytr, Xva, yva)
 
             pred_log = model.predict(Xva)
-            pred_price = np.exp(pred_log) if self.cfg.log_target else pred_log
+            if self.cfg.log_target:
+                pred_log = np.clip(pred_log, a_min=None, a_max=15.0)
+                pred_price = np.exp(pred_log)
+            else:
+                pred_price = pred_log
+            pred_price = np.asarray(pred_price).reshape(-1)
+            yva_price = np.asarray(yva_price).reshape(-1)
 
             # Guard against NaN/inf in predictions or targets
             if not np.isfinite(pred_price).all() or not np.isfinite(yva_price).all():
-                return float("-inf") if self.metric.direction == "maximize" else float("inf")
+                return float("-inf") if direction == "maximize" else float("inf")
 
             mask = np.isfinite(pred_price) & np.isfinite(yva_price)
             if mask.sum() < 2:
-                return float("-inf") if self.metric.direction == "maximize" else float("inf")
+                return float("-inf") if direction == "maximize" else float("inf")
 
-            score = self.metric.compute(yva_price[mask], pred_price[mask])
+            score = metric_compute(yva_price[mask], pred_price[mask])
             scores.append(score)
 
             # metric-aware pruning: only for safe loss-like metrics
-            if self.metric.supports_pruning():
-                trial.report(self.metric.as_loss(score), step)
+            if supports_pruning:
+                trial.report(metric_as_loss(score), step)
                 if trial.should_prune():
                     stopping_policy.on_trial_pruned()
+                    del model
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    elif hasattr(torch, "mps") and torch.backends.mps.is_available():
+                        torch.mps.empty_cache()
                     raise optuna.TrialPruned()
+            
+            del model
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif hasattr(torch, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
     
-        trial.set_user_attr("residual_cfg", residual_cfg)
+        trial.set_user_attr("residual_cfg", residual_cfg_use if residual_cfg_use else None)
         return float(np.mean(scores)) #float(np.mean(maes))
 
     def run(self):
         set_seed(self.cfg.seed)
+        self.run_id = getattr(self, "run_id", None) or str(uuid4())
 
         model_names = list(self.model_names)
         if not model_names:
             raise ValueError("No models specified for experiment.")
 
-        outer_cv = KFold(
-            n_splits=self.cfg.outer_folds,
-            shuffle=True,
-            random_state=self.cfg.seed,
-        )
-
         rows = []
-        default_policy = dict(cat_encoding="onehot", use_feature_selection=False)
-        for ofold, (tr, te) in enumerate(outer_cv.split(self.X), start=1):
+        default_policy = DEFAULT_PREPROCESS_POLICY
+        model_set = {m for m, _ in self.expanded_models}
+        coverage_params_by_model = {
+            m: extract_coverage_params_from_json(self.space, m) for m in model_set
+        }
+        preprocess_policy_by_model = {
+            m: get_preprocess_policy(m, default_policy) for m in model_set
+        }
+        interaction_policy_by_model = {
+            m: get_interaction_policy(m, "none") for m in model_set
+        }
+        report_metric_objs = [
+            build_metric(k) for k in self.cfg.report_metrics if k in METRIC_REGISTRY
+        ]
+        for ofold, (tr, te) in enumerate(
+            self.outer_splitter.split(self.X, self.y_log, self.cfg.seed),
+            start=1,
+        ):
+            self.observer.on_outer_fold_start(
+                RunContext(run_id=self.run_id, outer_fold=ofold)
+            )
             Xtr_raw = self.X.iloc[tr]
             Xte_raw = self.X.iloc[te]
             ytr_log = self.y_log[tr]
@@ -388,16 +620,47 @@ class NestedCVRunner:
 
             fold_seed = self.cfg.seed + ofold
 
+            pre_cache = {}
+            inner_folds_by_model = {}
+            inner_interaction_cache_by_model = {}
+            outer_interaction_cache = {}
+
             for model_name, residual_cfg in self.expanded_models:
-                pre_cache = {}
+                fixed, search = self.space.get(model_name)
+                fixed_r: Dict[str, Any] = {}
+                search_r: Dict[str, Any] = {}
+                if residual_cfg is not None and residual_cfg.get("kind"):
+                    fixed_r, search_r = self.space.get_residual(model_name, residual_cfg["kind"])
+
+                if model_name not in inner_folds_by_model:
+                    prepared_folds = []
+                    for step, (itr, iva) in enumerate(
+                        self.inner_splitter.split(Xtr_raw, ytr_log, fold_seed),
+                        start=1,
+                    ):
+                        prepared_folds.append(
+                            {
+                                "step": step,
+                                "Xtr_raw": Xtr_raw.iloc[itr],
+                                "Xva_raw": Xtr_raw.iloc[iva],
+                                "ytr": ytr_log[itr],
+                                "yva": ytr_log[iva],
+                                "yva_price": ytr_price[iva],
+                                "pre_key": make_pre_cache_key(model_name, fold_seed, itr),
+                            }
+                        )
+                    inner_folds_by_model[model_name] = prepared_folds
+                    inner_interaction_cache_by_model[model_name] = {}
+
+                inner_folds = inner_folds_by_model[model_name]
+                interaction_cache = inner_interaction_cache_by_model[model_name]
+
                 residual_tag = residual_cfg["kind"] if residual_cfg is not None else "base"
                 study_name_custom = f"{model_name}_OuterFold_{ofold}_residual_cfg_{residual_tag}"
                 study = self._create_study(seed=self.cfg.optuna_seed + ofold, 
                                            study_name=study_name_custom)
 
-                coverage_params = extract_coverage_params_from_json(self.space, 
-                                                                    model_label(model_name, 
-                                                                                residual_cfg))
+                coverage_params = coverage_params_by_model[model_name]
 
                 coverage_tracker = CoverageTracker(coverage_params)
                 stopping_policy = CoverageAwareEarlyStoppingPolicy(
@@ -406,64 +669,145 @@ class NestedCVRunner:
                     metric=self.metric,
                 )
 
-                callback = OptunaStoppingCallback(stopping_policy)
+                callback = OptunaStoppingCallback(
+                    stopping_policy,
+                    self.observer,
+                    RunContext(
+                        run_id=self.run_id,
+                        outer_fold=ofold,
+                        model_name=model_name,
+                    ),
+                )
 
                 study.optimize(
                     lambda t: self._inner_objective(
                         t,
                         model_name,
+                        preprocess_policy_by_model[model_name],
+                        interaction_policy_by_model[model_name],
+                        fixed,
+                        search,
+                        fixed_r,
+                        search_r,
                         residual_cfg,
-                        Xtr_raw,
-                        ytr_log,
-                        ytr_price,
                         fold_seed,
+                        ofold,
+                        self.run_id,
+                        inner_folds,
                         pre_cache,
-                        stopping_policy,
+                        interaction_cache,
+                        stopping_policy
                     ),
                     n_trials=self.cfg.n_trials,
                     timeout=self.cfg.timeout_sec,
                     callbacks=[callback],
+                    show_progress_bar=False,
                 )
+                self._record_study_trials(
+                    study,
+                    model_name=model_name,
+                    residual_cfg=residual_cfg,
+                    outer_fold=ofold,
+                )
+                
+                # Memory Management: Clear model-specific caches after tuning is done
+                if self.cfg.preprocessing_cache:
+                    keys_to_del = [
+                        k for k in pre_cache 
+                        if (isinstance(k, str) and k.startswith(f"{model_name}_")) or
+                           (isinstance(k, tuple) and len(k) > 0 and k[0] == model_name)
+                    ]
+                    for k in keys_to_del:
+                        del pre_cache[k]
+                if model_name in inner_interaction_cache_by_model:
+                    inner_interaction_cache_by_model[model_name].clear()
 
-                fixed, _ = self.space.get(model_name)
-                complete_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+                has_complete_trial = any(
+                    t.state == optuna.trial.TrialState.COMPLETE for t in study.trials
+                )
                 # handle fallback or raise a clearer error
-                if not complete_trials:
+                if not has_complete_trial:
                     raise RuntimeError(f"No completed trials for model {model_name} in outer fold {ofold}.")
                 
                 best_params = {**fixed, **study.best_params}
 
+                # Filter out residual parameters (they are stored in best_residual_cfg)
+                best_params = {k: v for k, v in best_params.items() if not k.startswith("residual__")}
+
+                if model_name == "RandomForest" and best_params.get("bootstrap") is False:
+                    best_params["max_samples"] = None
+                
+                best_residual_cfg = study.best_trial.user_attrs.get("residual_cfg")
+
                 self.best_params_records_.append(
-                    {"outer_fold": ofold, "model": model_name, "params": best_params}
+                    {
+                        "outer_fold": ofold,
+                        "model": model_name,
+                        "params": best_params,
+                        "residual_cfg": best_residual_cfg,
+                    }
                 )
                 self.best_params_.setdefault(model_name, []).append(best_params)
 
-                best_residual_cfg = study.best_trial.user_attrs.get("residual_cfg")
-
                 ## --- retrain on full outer train ---
-                policy = getattr(ModelFactory.MAP[model_name], "preprocess_policy", default_policy)
-
-                pre = PreprocessorBuilder(self.schema).build(
-                    cat_encoding=policy["cat_encoding"],
-                    use_feature_selection=policy["use_feature_selection"],
-                    seed=fold_seed
-                )
+                policy = preprocess_policy_by_model[model_name]
+                Xtr_use = Xtr_raw
+                Xte_use = Xte_raw
+                schema_use = self.schema
+                interaction_policy = interaction_policy_by_model[model_name]
+                if interaction_policy != "none":
+                    outer_key = (model_name, interaction_policy)
+                    if outer_key in outer_interaction_cache:
+                        Xtr_use, Xte_use, schema_use = outer_interaction_cache[outer_key]
+                    else:
+                        Xtr_use, add_num, add_cat = add_interaction_features(Xtr_raw, interaction_policy)
+                        Xte_use, _, _ = add_interaction_features(Xte_raw, interaction_policy)
+                        schema_use = FeatureSchema(
+                            target=self.schema.target,
+                            num_cols=self.schema.num_cols + add_num,
+                            cat_cols=self.schema.cat_cols + add_cat,
+                        )
+                        outer_interaction_cache[outer_key] = (Xtr_use, Xte_use, schema_use)
+                    pre = build_preprocessor(
+                        schema_use,
+                        PreprocessSpec(
+                            cat_encoding=policy["cat_encoding"],
+                            use_feature_selection=policy["use_feature_selection"],
+                            seed=fold_seed,
+                            run_id=self.run_id,
+                            outer_fold=ofold,
+                            inner_fold=None,
+                            model_name=model_name,
+                            trial_id=None,
+                        ),
+                    )
+                else:
+                    pre = self._preprocessor_factory(
+                        PreprocessSpec(
+                            cat_encoding=policy["cat_encoding"],
+                            use_feature_selection=policy["use_feature_selection"],
+                            seed=fold_seed,
+                            run_id=self.run_id,
+                            outer_fold=ofold,
+                            inner_fold=None,
+                            model_name=model_name,
+                            trial_id=None,
+                        )
+                    )
                 
-                Xtr = pre.fit_transform(Xtr_raw, ytr_log)
-                Xte = pre.transform(Xte_raw)
+                Xtr = pre.fit_transform(Xtr_use, ytr_log)
+                Xte = pre.transform(Xte_use)
                 
                 feature_names = pre.get_feature_names_out()
 
                 if model_name == "XGBoost":
-                    best_params["monotone_constraints"] = build_monotone_constraints(
-                        list(feature_names)
-                    )
+                    best_params["monotone_constraints"] = build_monotone_constraints(feature_names)
 
-                model = ModelFactory.create(
-                    model_name, 
-                    seed=fold_seed, 
+                model = build_model(
+                    model_name,
+                    seed=fold_seed,
                     params=best_params,
-                    residual_cfgs=[best_residual_cfg] if best_residual_cfg else None
+                    residual_cfgs=[best_residual_cfg] if best_residual_cfg else None,
                 )
                 model.fit(Xtr, ytr_log, None, None)
 
@@ -474,8 +818,8 @@ class NestedCVRunner:
                 if num_pipe is not None:
                     num_feature_names = num_pipe.get_feature_names_out()
 
-                    if "enet_fs" in num_pipe.named_steps:
-                        selector = num_pipe.named_steps["enet_fs"]
+                    if "lasso" in num_pipe.named_steps:
+                        selector = num_pipe.named_steps["lasso"]
                         mask = selector.get_support()
                         est = selector.estimator_
                         if hasattr(est, "coef_"):
@@ -491,42 +835,63 @@ class NestedCVRunner:
                     )
                 )
                 pred = model.predict(Xte)
-                pred_price = np.exp(pred) if self.cfg.log_target else pred
+                if self.cfg.log_target:
+                    pred = np.clip(pred, a_min=None, a_max=15.0)
+                    pred_price = np.exp(pred)
+                else:
+                    pred_price = pred
 
-                r2 = r2_score(yte_price, pred_price)
-                mae = mean_absolute_error(yte_price, pred_price)
-                medae = median_absolute_error(yte_price, pred_price)
-                mse = mean_squared_error(yte_price, pred_price)
-                rmse = np.sqrt(mse)
+                # Calculate reporting metrics using the registry
+                scores = {m.name: m.compute(yte_price, pred_price) for m in report_metric_objs}
 
                 label = model_label(model_name, residual_cfg)
-                rows.append(
-                    dict(
-                        outer_fold=ofold,
-                        model=label,
-                        R2=r2,
-                        MAE=mae,
-                        MedAE=medae,
-                        MSE=mse,
-                        RMSE=rmse,
-                    )
-                )
+                row = dict(outer_fold=ofold, model=label, **scores)
+                rows.append(row)
 
                 shap_model = model
-                shap_model_type = label
-                if hasattr(model, "base_model"):
-                    shap_model = model.base_model
-                    shap_model_type = model.base_model.model_type
+                if hasattr(model, "base"):
+                    shap_model = model.base
 
                 self.shap_store_.append(
                     dict(
                         model_name=model_name,
-                        model_type=shap_model_type,
+                        model_label=label,
+                        model_type=shap_model.model_type,
+                        explain_policy=getattr(shap_model, "explain_policy", None),
                         model=getattr(shap_model, "model", shap_model),
                         X_test=Xte,
-                        feature_names=pre.get_feature_names_out(),
+                        feature_names=feature_names,
                     )
                 )
+                
+                # Explicit cleanup after retraining
+                del model
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                elif hasattr(torch, "mps") and torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+
+            self.observer.on_outer_fold_end(
+                RunContext(run_id=self.run_id, outer_fold=ofold)
+            )
+
+        # Prune unstable hyperparameters (not present in all folds) to prevent aggregation crashes.
+        # This handles cases where residual strategies (and thus params) vary across folds.
+        for model_name, params_list in self.best_params_.items():
+            if len(params_list) < 2:
+                continue
+            
+            common_keys = set(params_list[0]).intersection(*params_list[1:])
+            
+            if not common_keys:
+                for p in params_list:
+                    p.clear()
+            else:
+                for p in params_list:
+                    if len(p) > len(common_keys):
+                        for k in (p.keys() - common_keys):
+                            del p[k]
 
         self.results_ = pd.DataFrame(rows)
         return self.results_

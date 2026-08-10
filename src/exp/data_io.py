@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import pandas as pd
+from .patterns import DataSource
 
 @dataclass
 class DataReadConfig:
@@ -29,11 +30,11 @@ class DataReadConfig:
 
 
 def _normalize_columns(df: pd.DataFrame, cfg: DataReadConfig) -> pd.DataFrame:
-    cols = list(df.columns)
+    cols = df.columns
     if cfg.strip_colnames:
-        cols = [c.strip() for c in cols]
+        cols = cols.str.strip()
     if cfg.lowercase_colnames:
-        cols = [c.lower() for c in cols]
+        cols = cols.str.lower()
     df.columns = cols
     return df
 
@@ -53,38 +54,43 @@ def read_csv_folder(cfg: DataReadConfig) -> pd.DataFrame:
     exclude = set(cfg.exclude_filenames or [])
 
     # file discovery
-    if cfg.recursive:
-        files = sorted(root.rglob(cfg.pattern))
-    else:
-        files = sorted(root.glob(cfg.pattern))
-
-    files = [p for p in files if p.is_file() and p.name not in exclude]
+    glob_method = root.rglob if cfg.recursive else root.glob
+    # Filter first, then sort (reduces sorting complexity)
+    files = sorted(p for p in glob_method(cfg.pattern) if p.is_file() and p.name not in exclude)
 
     if not files:
         raise FileNotFoundError(
             f"No files matched in {root.resolve()} with pattern={cfg.pattern} (recursive={cfg.recursive})."
         )
 
+    read_kwargs = {}
+    if cfg.encoding is not None:
+        read_kwargs["encoding"] = cfg.encoding
+    if cfg.sep is not None:
+        read_kwargs["sep"] = cfg.sep
+
     frames = []
     for p in files:
-        read_kwargs = {}
-        if cfg.encoding is not None:
-            read_kwargs["encoding"] = cfg.encoding
-        if cfg.sep is not None:
-            read_kwargs["sep"] = cfg.sep
         df = pd.read_csv(p, **read_kwargs)
 
         # Rename the 'tax(£)' column to 'tax' if it exists.
-        if 'tax(£)' in df.columns:
-            df = df.rename(columns={'tax(£)': 'tax'})
+        df.rename(columns={'tax(£)': 'tax'}, inplace=True)
         
         df = _normalize_columns(df, cfg)
         if cfg.add_source_column:
-            df[cfg.source_column_name] = str(p.as_posix())
+            df[cfg.source_column_name] = p.as_posix()
         frames.append(df)
 
     out = pd.concat(frames, axis=0, ignore_index=True, sort=False)
     return out
+
+
+@dataclass
+class CsvFolderSource(DataSource):
+    cfg: DataReadConfig
+
+    def read(self) -> pd.DataFrame:
+        return read_csv_folder(self.cfg)
 
 
 def coerce_dtypes(
@@ -101,14 +107,15 @@ def coerce_dtypes(
     df = df.copy()
 
     if numeric_cols:
-        for c in numeric_cols:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors=errors)
+        # Filter valid columns first to avoid nested checks
+        valid_numeric = [c for c in numeric_cols if c in df.columns]
+        for c in valid_numeric:
+            df[c] = pd.to_numeric(df[c], errors=errors)
 
     if categorical_cols:
-        for c in categorical_cols:
-            if c in df.columns:
-                df[c] = df[c].astype("category")
+        valid_categorical = [c for c in categorical_cols if c in df.columns]
+        for c in valid_categorical:
+            df[c] = df[c].astype("category")
 
     return df
 
@@ -122,7 +129,6 @@ def basic_clean(
     Basic cleaning rules that are safe and generic.
     - Optionally drop rows with missing target.
     """
-    df = df.copy()
     if dropna_target and target in df.columns:
-        df = df.dropna(subset=[target])
-    return df
+        return df.dropna(subset=[target])
+    return df.copy()

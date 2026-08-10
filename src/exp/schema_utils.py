@@ -19,6 +19,10 @@ def sanitize_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
         # replace invalid chars
         new = VALID_NAME.sub("_", new)
 
+        # if empty after sanitization → fallback name
+        if not new:
+            new = "f"
+
         # if starts with digit → prefix
         if new[0].isdigit():
             new = f"f_{new}"
@@ -70,3 +74,37 @@ def infer_schema(
             cat_cols.append(c)
 
     return target, num_cols, cat_cols
+
+def clean_feature_name(name: str) -> str:
+    """
+    Final SHAP feature name sanitizer.
+    """
+
+    # # 1. Replace double-space with single space
+    name = name.replace("  ", " ")
+
+    # # 2. Replace underscore-space with underscore
+    name = name.replace("_ ", "_")
+
+    # # 3. Replace space-underscore with underscore
+    name = name.replace(" _", "_")
+
+    # # 4. Replace space with underscore
+    name = name.replace(" ", "_")
+
+    # # 5. Collapse multiple underscores
+    name = re.sub(r"__+", "_", name)
+
+    # # 6. Remove known prefixes anywhere at the start
+    name = re.sub(r"^(cat_te_|cat__|cat_|num_)", "", name)
+
+    # # 7. Remove leftover 'te_' if it survived
+    name = re.sub(r"(^|_)te_", r"\1", name)
+
+    # # 8. Remove train/test suffixes
+    name = re.sub(r"(_te|_tr|_test|_train)$", "", name)
+    
+    # # 9. Remove leading/trailing underscores
+    name = name.strip("_")
+
+    return name

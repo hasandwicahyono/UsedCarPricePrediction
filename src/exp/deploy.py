@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Callable, Tuple
+
+import joblib
+import numpy as np
+import pandas as pd
+
+from .factories import get_interaction_policy
+from .interaction_features import add_interaction_features
+
+
+def load_best_model_name(artifact_path: str = "outputs/artifacts/best_model.json") -> str:
+    path = Path(artifact_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Best-model artifact not found: {path.resolve()}")
+    with path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    name = payload.get("best_model")
+    if not name:
+        raise ValueError("best_model not found in artifact payload.")
+    return name
+
+
+def load_model_artifacts(
+    model_name: str,
+    model_dir: str = "outputs/models",
+) -> Tuple[object, object]:
+    model_dir = Path(model_dir)
+    base_model_name = model_name.split("+")[0]
+    pre = joblib.load(model_dir / f"{base_model_name}_preprocessor.joblib")
+    model = joblib.load(model_dir / f"{model_name}.joblib")
+    return model, pre
+
+
+def make_predictor(
+    *,
+    model_name: str | None = None,
+    model_dir: str = "outputs/models",
+    artifact_path: str = "outputs/artifacts/best_model.json",
+    log_target: bool = True,
+) -> Tuple[Callable, object, object]:
+    if model_name is None:
+        model_name = load_best_model_name(artifact_path)
+
+    model, pre = load_model_artifacts(model_name, model_dir=model_dir)
+    base_model_name = model_name.split("+")[0]
+    interaction_policy = get_interaction_policy(base_model_name, "none")
+
+    def predict(X):
+        X_in = X
+        if interaction_policy != "none" and isinstance(X, pd.DataFrame):
+            X_in, _, _ = add_interaction_features(X, interaction_policy)
+        Xp = pre.transform(X_in)
+        pred = np.asarray(model.predict(Xp)).reshape(-1)
+        if log_target:
+            pred = np.clip(pred, a_min=None, a_max=15.0)
+            return np.exp(pred)
+        return pred
+
+    return predict, model, pre

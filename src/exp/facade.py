@@ -9,12 +9,27 @@ from collections import Counter
 
 from .config import FeatureSchema, ExperimentConfig
 from .tuning import NestedCVRunner
-from .models import ModelFactory
-from .evaluation import summarize_mean_std, paired_tests, significance_matrix
-from .shap_analysis import ShapAnalyzer
+from .factories import build_model, build_preprocessor, get_preprocess_policy
+from .policies import (
+    DEFAULT_PREPROCESS_POLICY,
+    DEFAULT_INTERACTION_POLICY,
+    DEFAULT_EXPLAIN_POLICY,
+    PREPROCESS_POLICIES,
+    INTERACTION_FEATURE_POLICIES,
+    EXPLAIN_POLICIES,
+)
+from .specs import PreprocessSpec
+from .evaluation import paired_tests, significance_matrix, DefaultEvaluator
 from .data_io import DataReadConfig, read_csv_folder, coerce_dtypes, basic_clean
+from .interpretability import ComplementaryExplainer
 from .plot_manager import PlotManager
-from .preprocess import PreprocessorBuilder
+from .sensitivity import (
+    plot_hyperparameter_sensitivity,
+    save_hyperparameter_sensitivity,
+    summarize_hyperparameter_sensitivity,
+    trial_records_to_frame,
+)
+from .utils import model_label
 
 
 def aggregate_hyperparams(param_dicts):
@@ -23,18 +38,47 @@ def aggregate_hyperparams(param_dicts):
     - numeric → median
     - categorical → mode
     """
+    if not param_dicts:
+        return {}
+
     aggregated = {}
-    keys = param_dicts[0].keys()
+    keys = sorted({k for d in param_dicts for k in d.keys()})
 
     for k in keys:
-        values = [p[k] for p in param_dicts]
-        # make list-like hashable for mode calculation
-        if any(isinstance(v, list) for v in values):
-            values = [tuple(v) if isinstance(v, list) else v for v in values]
+        values = []
+        all_numeric = True
+        all_int = True
+        all_bool = True
 
-        if isinstance(values[0], (int, float)):
-            agg = float(np.median(values))
-            if isinstance(values[0], int):
+        for p in param_dicts:
+            if k not in p:
+                continue
+            v = p[k]
+            if isinstance(v, np.generic):
+                v = v.item()
+            if isinstance(v, list):
+                v = tuple(v)
+            values.append(v)
+
+            if not isinstance(v, bool):
+                all_bool = False
+            if isinstance(v, bool):
+                all_numeric = False
+                all_int = False
+            elif not isinstance(v, (int, float)): #_is_numeric(v):
+                all_numeric = False
+                all_int = False
+            elif not isinstance(v, int):
+                all_int = False
+
+        if not values:
+            continue
+
+        if all_bool:
+            aggregated[k] = Counter(values).most_common(1)[0][0]
+        elif all_numeric:
+            agg = float(np.median(np.asarray(values, dtype=float)))
+            if all_int:
                 agg = int(round(agg))
             aggregated[k] = agg
         else:
@@ -46,6 +90,42 @@ def aggregate_hyperparams(param_dicts):
     return aggregated
 
 
+def aggregate_residual_cfg(residual_cfgs):
+    """
+    Aggregate residual configs across folds by mode on the full config dict.
+    """
+    if not residual_cfgs:
+        return None
+    serialized = [
+        json.dumps(cfg, sort_keys=True) if cfg is not None else None
+        for cfg in residual_cfgs
+    ]
+    mode_val = Counter(serialized).most_common(1)[0][0]
+    if mode_val is None:
+        return None
+    return json.loads(mode_val)
+
+
+def _normalize_model_params(model_name: str, params: dict) -> dict:
+    normalized = dict(params)
+    if model_name == "RandomForest" and "bootstrap" in normalized:
+        bootstrap = normalized["bootstrap"]
+        if isinstance(bootstrap, (int, np.integer)) and bootstrap in (0, 1):
+            normalized["bootstrap"] = bool(bootstrap)
+        if normalized.get("bootstrap") is False:
+            normalized["max_samples"] = None
+    return normalized
+
+
+class EnsembleModel:
+    def __init__(self, models: list):
+        self.models = models
+
+    def predict(self, X):
+        preds = [m.predict(X) for m in self.models]
+        return np.mean(np.vstack(preds), axis=0)
+
+
 class ExperimentFacade:
     def __init__(
         self,
@@ -53,13 +133,34 @@ class ExperimentFacade:
         schema: FeatureSchema,
         cfg: ExperimentConfig,
         model_names: List[str],
-        hparam_json: Optional[str] = None
+        hparam_json: Optional[str] = None,
+        evaluator: Optional[DefaultEvaluator] = None,
     ):
-        self.runner = NestedCVRunner(df, schema, cfg, model_names, hparam_json=hparam_json)
+        self.runner = NestedCVRunner(
+            df, 
+            schema, 
+            cfg, 
+            model_names, 
+            hparam_json=hparam_json
+        )
         self.df = df
         self.cfg = cfg
         self.schema = schema
         self.model_names = list(model_names)
+        self.evaluator = evaluator or DefaultEvaluator()
+
+    @staticmethod
+    def enable_intel_acceleration():
+        """
+        Enable Intel® Extension for Scikit-Learn to speed up 
+        classical ML algorithms (SVR, RandomForest, etc.)
+        """
+        try:
+            from sklearnex import patch_sklearn
+            patch_sklearn()
+            print("[info] Intel® Extension for Scikit-Learn (sklearnex) enabled.")
+        except (ImportError, Exception) as e:
+            print(f"[warning] Failed to enable Intel® Extension for Scikit-Learn ({e}). Proceeding with standard scikit-learn.")
 
     def run(self):
         self.results_ = self.runner.run()
@@ -67,6 +168,93 @@ class ExperimentFacade:
         self._refit_and_save_models()
         self._save_best_model_artifact()
         return self.results_
+
+    def data_info(self, out_dir: str = "outputs/csvs", prefix: str = "dataset") -> dict:
+        """
+        Summarize dataset information and save summary tables.
+        Returns a dict with key metrics.
+        """
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        df = self.df.copy()
+        num_cols = self.schema.num_cols + [self.schema.target]
+        cat_cols = self.schema.cat_cols
+
+        info = {
+            "shape": df.shape,
+            "n_rows": df.shape[0],
+            "n_cols": df.shape[1],
+            "n_numeric": len(self.schema.num_cols),
+            "n_categorical": len(cat_cols),
+        }
+
+        # Missing values summary
+        missing = df.isna().sum().sort_values(ascending=False)
+        missing = missing[missing > 0]
+        missing.to_frame("missing_count").to_csv(out_path / f"{prefix}_missing_values.csv")
+
+        # Numeric summary
+        df[num_cols].describe().T.to_csv(out_path / f"{prefix}_numeric_summary.csv")
+
+        # Categorical summary (top 10 per column)
+        cat_summary_rows = []
+        for col in cat_cols:
+            vc = df[col].value_counts(dropna=False).head(10)
+            for level, count in vc.items():
+                cat_summary_rows.append({"column": col, "level": level, "count": count})
+        if cat_summary_rows:
+            pd.DataFrame(cat_summary_rows).to_csv(out_path / f"{prefix}_categorical_top10.csv", index=False)
+
+        return df.info(verbose=True, show_counts=True, memory_usage="deep")
+
+    def correlation_plot(
+        self,
+        out_dir: str = "outputs/figures/correlation",
+        filename: str = "correlation_heatmap.png",
+        figsize=(9, 7),
+    ) -> str:
+        """
+        Save a correlation heatmap (numeric features + target) with scores.
+        Returns the saved file path.
+        """
+        num_cols = self.schema.num_cols + [self.schema.target]
+        plot_manager = PlotManager(base_dir=out_dir, dpi=300, fmt="png", tight_layout=True)
+        fig = plot_manager.plot_correlation_heatmap(
+            df=self.df,
+            cols=num_cols,
+            figsize=figsize,
+        )
+
+        stem = filename.rsplit(".", 1)[0]
+        plot_manager.save_fig(fig, stem)
+        return str(Path(out_dir) / f"{stem}.png")
+
+    def metric_comparison_plots(
+        self,
+        out_dir: str = "outputs/figures/metrics",
+        metrics: list[str] | None = None,
+        baseline: str = "RandomForest",
+        ci: float = 0.95,
+    ) -> dict[str, str]:
+        if self.results_ is None:
+            raise ValueError("No results available. Run the experiment first.")
+        metrics = metrics or [m.upper() for m in self.cfg.report_metrics if m.upper() in self.results_.columns]
+        lower_is_better = {
+            "R2": False,
+            "MAE": True,
+            "MEDAE": True,
+            "MSE": True,
+            "RMSE": True,
+        }
+        plot_manager = PlotManager(base_dir=out_dir, dpi=300, fmt="png", tight_layout=True)
+        return plot_manager.save_metric_comparison_plots(
+            self.results_,
+            metrics=metrics,
+            baseline=baseline,
+            ci=ci,
+            lower_is_better=lower_is_better,
+        )
 
     def _save_best_model_artifact(self, out_dir="outputs/artifacts"):
         out_dir = Path(out_dir)
@@ -78,7 +266,7 @@ class ExperimentFacade:
 
         summary = (
             self.results_
-            .groupby("model")[metric]
+            .groupby("model", observed=False)[metric]
             .mean()
             .sort_values(ascending=ascending)
         )
@@ -107,6 +295,10 @@ class ExperimentFacade:
             with open(out_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
 
+        residuals_per_model = {}
+        for rec in self.runner.best_params_records_:
+            residuals_per_model.setdefault(rec["model"], []).append(rec.get("residual_cfg"))
+
         for model_name, params_per_fold in self.runner.best_params_.items():
             payload[model_name] = {
                 "aggregated": aggregate_hyperparams(params_per_fold),
@@ -114,6 +306,8 @@ class ExperimentFacade:
                 "n_outer_folds": len(params_per_fold),
                 "metric_optimized": self.cfg.metric_opt,
                 "seed": self.cfg.seed,
+                "residual_cfg": aggregate_residual_cfg(residuals_per_model.get(model_name, [])),
+                "residual_cfg_per_outer_fold": residuals_per_model.get(model_name, []),
             }
 
         with open(out_path, "w", encoding="utf-8") as f:
@@ -121,7 +315,7 @@ class ExperimentFacade:
 
         print(f"[saved] {out_path.resolve()}")
 
-    def _refit_and_save_models(self, out_dir="outputs/models", hyperparams_dir="outputs/hyperparameters"):
+    def _refit_and_save_models(self, out_dir="outputs/models", hyperparams_dir="outputs/hyperparameters", top_k: int = 3):
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -132,44 +326,220 @@ class ExperimentFacade:
         X = self.df[self.schema.num_cols + self.schema.cat_cols]
         y = self.df[self.schema.target]
 
+        metric_col = self.cfg.metric_name.upper()
+        metric_opt = self.cfg.metric_opt
+        score_lookup = {}
+        if self.results_ is not None and metric_col in self.results_.columns:
+            for row in self.results_[["model", "outer_fold", metric_col]].itertuples(index=False, name=None):
+                key = (row[0], row[1])
+                if key not in score_lookup:
+                    score_lookup[key] = float(row[2]) if pd.notna(row[2]) else None
+        records_by_model = {}
+        for rec in self.runner.best_params_records_:
+            m = rec.get("model")
+            if m is None:
+                continue
+            records_by_model.setdefault(m, []).append(rec)
+        pre_cache = {}
+        canon_cfg = lambda cfg: json.dumps(cfg, sort_keys=True) if isinstance(cfg, dict) else None
+
         for model_name in self.model_names:
             print(f"[final fit] {model_name}")
 
             # build preprocessing
-            pre = PreprocessorBuilder(self.schema).build()
-            Xp = pre.fit_transform(X, y)
+            policy = get_preprocess_policy(model_name, DEFAULT_PREPROCESS_POLICY)
+            pre_key = (
+                policy["cat_encoding"],
+                bool(policy["use_feature_selection"]),
+                policy.get("feature_selection_method", "lasso"),
+            )
+            if pre_key in pre_cache:
+                pre, Xp = pre_cache[pre_key]
+            else:
+                pre = build_preprocessor(
+                    self.schema,
+                    PreprocessSpec(
+                        cat_encoding=policy["cat_encoding"],
+                        use_feature_selection=policy["use_feature_selection"],
+                        feature_selection_method=policy.get("feature_selection_method", "lasso"),
+                        seed=self.cfg.seed,
+                    ),
+                )
+                Xp = pre.fit_transform(X, y)
+                pre_cache[pre_key] = (pre, Xp)
 
             # build model with BEST params
-            params = best_params[model_name]["aggregated"]
-            model = ModelFactory.create(model_name, seed=self.cfg.seed, params=params)
+            params = _normalize_model_params(
+                model_name, best_params[model_name]["aggregated"]
+            )
+            residual_cfg = best_params[model_name].get("residual_cfg")
+            residual_cfg_key = canon_cfg(residual_cfg)
+            model = build_model(
+                model_name,
+                seed=self.cfg.seed,
+                params=params,
+                residual_cfgs=[residual_cfg] if residual_cfg else None,
+            )
 
             model.fit(Xp, y)
 
             # save both
-            if model_name == "NeuralNetwork":
-                model.model.save(out_dir / f"{model_name}.keras")
-            else:   
-                joblib.dump(model, out_dir / f"{model_name}.joblib")
+            label = model_name
+            if residual_cfg is not None and isinstance(residual_cfg, dict):
+                kind = residual_cfg.get("kind")
+                if kind:
+                    label = f"{model_name}+{kind}"
+            joblib.dump(model, out_dir / f"{label}.joblib")
             
             joblib.dump(pre, out_dir / f"{model_name}_preprocessor.joblib")
 
             print(f"[saved] {model_name}")
 
+            # also save all residual variants (if configured)
+            residual_cfgs = self.cfg.residuals.get(model_name, []) if isinstance(self.cfg.residuals, dict) else []
+            seen = set()
+            for rc in residual_cfgs:
+                if not rc or rc.get("kind") in (None, "None"):
+                    continue
+                key = canon_cfg(rc)
+                if key in seen:
+                    continue
+                seen.add(key)
+                # Skip duplicate retrain when this variant is exactly the already-fitted best residual model.
+                if key == residual_cfg_key:
+                    continue
+
+                r_model = build_model(
+                    model_name,
+                    seed=self.cfg.seed,
+                    params=params,
+                    residual_cfgs=[rc],
+                )
+                r_model.fit(Xp, y)
+                label = f"{model_name}+{rc.get('kind')}"
+                joblib.dump(r_model, out_dir / f"{label}.joblib")
+                print(f"[saved] {label}")
+
+            # optional top-k ensemble using per-fold best params
+            if top_k and model_name in best_params:
+                records = records_by_model.get(model_name, [])
+                if records:
+                    scored = []
+                    for r in records:
+                        label = model_label(model_name, r.get("residual_cfg"))
+                        ofold = r.get("outer_fold")
+                        score = score_lookup.get((label, ofold))
+                        scored.append((score, r))
+
+                    # sort by score, fallback to original order if score is None
+                    if metric_opt == "minimize":
+                        scored.sort(key=lambda x: (x[0] is None, x[0]))
+                    else:
+                        scored.sort(key=lambda x: (x[0] is None, -(x[0] if x[0] is not None else 0)))
+
+                    top = [r for _, r in scored[: max(1, int(top_k))]]
+                    models = []
+                    for r in top:
+                        r_params = _normalize_model_params(
+                            model_name, r.get("params", {})
+                        )
+                        r_residual_cfg = r.get("residual_cfg")
+                        # Reuse already-fitted final model when same params + residual config.
+                        if r_params == params and canon_cfg(r_residual_cfg) == residual_cfg_key:
+                            models.append(model)
+                        else:
+                            m = build_model(
+                                model_name,
+                                seed=self.cfg.seed,
+                                params=r_params,
+                                residual_cfgs=[r_residual_cfg] if r_residual_cfg else None,
+                            )
+                            m.fit(Xp, y)
+                            models.append(m)
+
+                    if models:
+                        ensemble = EnsembleModel(models)
+                        joblib.dump(ensemble, out_dir / f"{model_name}_ensemble_top{len(models)}.joblib")
+                        print(f"[saved] {model_name} ensemble top{len(models)}")
+
     def summary(self):
-        return summarize_mean_std(self.runner.results_)
+        return self.evaluator.summary(self.runner.results_)
 
     def significance(self, metric="MAE", baseline="RandomForest", models: list[str] | None = None):
         return paired_tests(self.runner.results_, metric=metric, baseline=baseline, models=models)
 
-    def significance_matrix(self, metric="MAE"):
-        return significance_matrix(self.runner.results_, metric=metric)
+    def significance_matrix(self, metric="MAE", models: list[str] | None = None):
+        return self.evaluator.significance_matrix(self.runner.results_, metric=metric, models=models)
 
-    def shap(self, plot_dir: str = "outputs/figures/shap", models: list[str] | None = None):
+    def optuna_trials(self) -> pd.DataFrame:
+        return trial_records_to_frame(self.runner.trial_records_)
+
+    def hyperparameter_sensitivity(
+        self,
+        out_dir: str = "outputs/sensitivity",
+        top_n: int = 20,
+        save: bool = True,
+    ) -> pd.DataFrame:
+        trials = self.optuna_trials()
+        if save:
+            _, summary, _ = save_hyperparameter_sensitivity(
+                trials,
+                out_dir=out_dir,
+                top_n=top_n,
+            )
+            return summary
+        return summarize_hyperparameter_sensitivity(trials)
+
+    def plot_hyperparameter_sensitivity(
+        self,
+        model: str | None = None,
+        top_n: int = 20,
+    ):
+        summary = summarize_hyperparameter_sensitivity(self.optuna_trials())
+        return plot_hyperparameter_sensitivity(summary, model=model, top_n=top_n)
+
+    def complementary_explainability(
+        self,
+        out_dir: str = "outputs/interpretability",
+        models: list[str] | None = None,
+        max_features: int = 8,
+        n_counterfactuals: int = 5,
+        max_entries_per_model: int | None = 2,
+        max_samples: int = 200,
+        grid_size: int = 20,
+        save: bool = True,
+    ):
+        explainer = ComplementaryExplainer(
+            self.runner.shap_store_,
+            seed=self.cfg.seed,
+            max_entries_per_model=max_entries_per_model,
+            max_samples=max_samples,
+            grid_size=grid_size,
+            models=models,
+        )
+        if save:
+            return explainer.save(
+                out_dir=out_dir,
+                models=models,
+                max_features=max_features,
+                n_counterfactuals=n_counterfactuals,
+            )
+        return explainer
+
+    def shap(
+        self,
+        plot_dir: str = "outputs/figures/shap",
+        models: list[str] | None = None,
+        max_entries_per_model: int | None = None,
+    ):
+        from .shap_analysis import ShapAnalyzer
+
         pm = PlotManager(base_dir=plot_dir)
         return ShapAnalyzer(
             self.runner.shap_store_,
             background_size=self.cfg.shap_background_size,
             max_eval_samples=self.cfg.shap_max_eval_samples,
+            max_entries_per_model=max_entries_per_model,
             seed=self.cfg.seed,
             plot_manager=pm,
             models=models
@@ -183,7 +553,15 @@ class ExperimentFacade:
                 "outer_folds": self.cfg.outer_folds,
                 "inner_folds": self.cfg.inner_folds,
                 "n_trials": self.cfg.n_trials,
-                "log_target": self.cfg.log_target
+                "log_target": self.cfg.log_target,
+                "policies": {
+                    "default_preprocess_policy": DEFAULT_PREPROCESS_POLICY,
+                    "default_interaction_policy": DEFAULT_INTERACTION_POLICY,
+                    "default_explain_policy": DEFAULT_EXPLAIN_POLICY,
+                    "preprocess_policies": PREPROCESS_POLICIES,
+                    "interaction_feature_policies": INTERACTION_FEATURE_POLICIES,
+                    "explain_policies": EXPLAIN_POLICIES,
+                },
             },
             "best_params": self.runner.best_params_records_
         }
