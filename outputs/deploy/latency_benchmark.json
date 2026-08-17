@@ -1,0 +1,25 @@
+{
+  "model_name": "XGBoost+PseudoHuber",
+  "n_single_instance_runs": 300,
+  "single_instance_latency_ms": {
+    "mean": 0.26126762003210996,
+    "median": 0.24914599634939805,
+    "p95": 0.29515000496758154,
+    "p99": 0.47641625380492764,
+    "max": 1.7771249986253679
+  },
+  "batch_throughput": {
+    "batch_size": 500,
+    "n_runs": 20,
+    "mean_batch_time_ms": 1.7934664982021786,
+    "per_instance_batched_ms": 0.003586932996404357
+  },
+  "artifact_size_mb": {
+    "model": 11.879927,
+    "preprocessor": 0.006867
+  },
+  "hardware": {
+    "processor": "arm",
+    "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O"
+  }
+}
